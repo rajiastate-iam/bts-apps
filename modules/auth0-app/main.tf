@@ -1,3 +1,12 @@
+terraform {
+  required_providers {
+    auth0 = {
+      source  = "auth0/auth0"
+      version = "~> 1.37.0"
+    }
+  }
+}
+
 resource "auth0_client" "app" {
   name        = var.display_name
   description = "Org: ${var.org_name} | SNOW: ${var.servicenow_req}"
