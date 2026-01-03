@@ -1,0 +1,66 @@
+name: Terraform Apply (Local State POC)
+
+on:
+  # Manual runs for PoC
+  workflow_dispatch:
+
+  # And auto-run on changes to app registrations on master
+  push:
+    branches: ["master"]
+    paths:
+      - "apps/**/*.yaml"
+      - "apps/**/*.yml"
+
+jobs:
+  apply-with-local-state:
+    runs-on: ubuntu-latest
+
+    # Needed so this workflow can push terraform.tfstate back to the repo
+    permissions:
+      contents: write
+
+    env:
+      TF_VAR_auth0_domain:        ${{ secrets.AUTH0_DOMAIN }}
+      TF_VAR_auth0_client_id:     ${{ secrets.AUTH0_CLIENT_ID }}
+      TF_VAR_auth0_client_secret: ${{ secrets.AUTH0_CLIENT_SECRET }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yq
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      # NOTE: This uses the local backend defined in providers.tf (terraform.tfstate in repo root)
+      # TODO: When migrating to Azure, update providers.tf backend to azurerm and REMOVE the state-commit step below.
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Apply
+        run: terraform apply -input=false -auto-approve
+
+      # POC ONLY: commit terraform.tfstate back into the repo so future runs share the same state.
+      # TODO: REMOVE this step once state is stored in Azure Blob Storage.
+      - name: Commit updated Terraform state (POC only)
+        run: |
+          # Configure git identity for the bot
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage state + lock file if they exist
+          git add terraform.tfstate .terraform.lock.hcl || true
+
+          # If nothing changed, exit quietly
+          if git diff --cached --quiet; then
+            echo "No Terraform state changes to commit."
+            exit 0
+          fi
+
+          # Commit and push; [skip ci] avoids re-triggering workflows from this commit
+          git commit -m "Update Terraform state [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}
