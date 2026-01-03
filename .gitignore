@@ -1,1 +1,8 @@
+# For POC, these should NOT be present:
+# terraform.tfstate
+# *.tfstate
+# *.tfstate.*
+# .terraform.lock.hcl
+
+# Keep ignoring local working dir:
 .terraform/

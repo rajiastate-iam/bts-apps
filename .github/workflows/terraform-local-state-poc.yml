@@ -1,15 +1,15 @@
 name: Terraform Apply (Local State POC)
 
 on:
-  # Manual runs for PoC
-  workflow_dispatch:
-
-  # And auto-run on changes to app registrations on master
+  # Auto-run when app YAMLs change on master (i.e., after PR merge)
   push:
     branches: ["master"]
     paths:
       - "apps/**/*.yaml"
       - "apps/**/*.yml"
+
+  # Optional: manual trigger if you ever want it
+  workflow_dispatch:
 
 jobs:
   apply-with-local-state:
@@ -36,31 +36,25 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      # NOTE: This uses the local backend defined in providers.tf (terraform.tfstate in repo root)
-      # TODO: When migrating to Azure, update providers.tf backend to azurerm and REMOVE the state-commit step below.
       - name: Terraform Init
         run: terraform init -input=false
 
       - name: Terraform Apply
         run: terraform apply -input=false -auto-approve
 
-      # POC ONLY: commit terraform.tfstate back into the repo so future runs share the same state.
-      # TODO: REMOVE this step once state is stored in Azure Blob Storage.
+      # POC ONLY: commit terraform.tfstate back into repo
+      # TODO: remove this when migrating state to Azure Blob backend.
       - name: Commit updated Terraform state (POC only)
         run: |
-          # Configure git identity for the bot
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Stage state + lock file if they exist
           git add terraform.tfstate .terraform.lock.hcl || true
 
-          # If nothing changed, exit quietly
           if git diff --cached --quiet; then
             echo "No Terraform state changes to commit."
             exit 0
           fi
 
-          # Commit and push; [skip ci] avoids re-triggering workflows from this commit
           git commit -m "Update Terraform state [skip ci]"
           git push origin HEAD:${{ github.ref_name }}
