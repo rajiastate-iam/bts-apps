@@ -2,7 +2,7 @@ name: Apply Auth0 Changes
 
 on:
   push:
-    branches: ["main"]
+    branches: ["master"]
     paths:
       - "apps/**/*.yaml"
 
