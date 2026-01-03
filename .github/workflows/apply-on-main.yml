@@ -5,6 +5,7 @@ on:
     branches: ["master"]
     paths:
       - "apps/**/*.yaml"
+      - "apps/**/*.yml"
 
 jobs:
   apply:
@@ -16,7 +17,8 @@ jobs:
       TF_VAR_auth0_client_secret: ${{ secrets.AUTH0_CLIENT_SECRET }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install yq
         run: |
@@ -31,3 +33,13 @@ jobs:
 
       - name: Terraform Apply
         run: terraform apply -input=false -auto-approve
+
+      # NEW: upload the state and lockfile as an artifact
+      - name: Upload Terraform state artifact (POC only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-state
+          path: |
+            terraform.tfstate
+            .terraform.lock.hcl
+          if-no-files-found: ignore
