@@ -1,0 +1,34 @@
+# ====== Organisational info ======
+orgname: BTS
+servicenow_req: REQ0012345
+
+# ====== Identity ======
+app: orders-spa
+env: prod
+
+displayname: "BTS Orders SPA (Prod)"
+apptype: spa  # spa | regular_web | native | non_interactive | machine_to_machine
+
+# ====== Grants ======
+granttypes:
+  - authorization_code
+  - refresh_token
+
+# ====== URLs ======
+callbacks:
+  - https://orders.bts.example.com/callback
+
+logouturls:
+  - https://orders.bts.example.com/logout
+
+allowedorigins:
+  - https://orders.bts.example.com
+
+# ====== Metadata ======
+clientmetadata:
+  system: orders
+  owner_team: orders-platform
+  environment: prod
+
+# ====== JWT ======
+jwtlifetimeinseconds: 3600

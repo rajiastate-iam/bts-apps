@@ -1,0 +1,56 @@
+name: Publish Auth0 App to IAM
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "auth0/app-registration.yaml"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yq
+
+      - name: Read metadata from YAML
+        id: meta
+        run: |
+          FILE="auth0/app-registration.yaml"
+          ORG=$(yq -r '.orgname' "$FILE")
+          APP=$(yq -r '.app' "$FILE")
+          ENV=$(yq -r '.env' "$FILE")
+
+          echo "org=$ORG" >> $GITHUB_OUTPUT
+          echo "app=$APP" >> $GITHUB_OUTPUT
+          echo "env=$ENV" >> $GITHUB_OUTPUT
+
+      - name: Prepare IAM repo path structure
+        run: |
+          mkdir -p apps/${{ steps.meta.outputs.org }}
+          cp auth0/app-registration.yaml apps/${{ steps.meta.outputs.org }}/${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}.yaml
+
+      - name: Create PR in IAM repo
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.IAM_REPO_TOKEN }}
+          commit-message: |
+            Auth0 app registration: ${{ steps.meta.outputs.org }} / ${{ steps.meta.outputs.app }} / ${{ steps.meta.outputs.env }}
+          title: |
+            Auth0 app registration: ${{ steps.meta.outputs.org }} / ${{ steps.meta.outputs.app }} / ${{ steps.meta.outputs.env }}
+          body: |
+            Automated PR from app team repo: ${{ github.repository }}
+            Commit: ${{ github.sha }}
+
+          branch: "auto/${{ steps.meta.outputs.org }}-${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}-${{ github.run_id }}"
+          base: "main"
+          repository: your-org/iam-auth0
+
+          add-paths: |
+            apps/${{ steps.meta.outputs.org }}/${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}.yaml
