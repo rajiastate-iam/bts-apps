@@ -34,7 +34,8 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -input=false -auto-approve
 
-      # NEW: upload the state and lockfile as an artifact
+      # ---- POC ONLY ----
+      # Upload terraform state to pass to the second workflow
       - name: Upload Terraform state artifact (POC only)
         uses: actions/upload-artifact@v4
         with:

@@ -2,20 +2,19 @@ name: Terraform State Commit (Local State POC)
 
 on:
   workflow_run:
-    workflows: ["Apply Auth0 Changes"]   # must match the name above exactly
+    workflows: ["Apply Auth0 Changes"]   # must match apply workflow name EXACTLY
     types:
       - completed
 
 jobs:
   commit-state:
-    # Only run if the apply workflow succeeded
+    # only run if apply workflow succeeded
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
 
-    # Need to read artifacts & push commits
     permissions:
-      contents: write
-      actions: read
+      contents: write     # allow pushing to repo
+      actions: read       # allow reading artifacts
 
     steps:
       - name: Checkout repository
@@ -26,16 +25,18 @@ jobs:
         with:
           name: terraform-state
           path: ./state-artifact
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
 
-      - name: Move state files into repo root
+      - name: Move state into repo root
         run: |
-          # Copy if they exist; if first run, they should.
           cp -f state-artifact/terraform.tfstate terraform.tfstate || true
           cp -f state-artifact/.terraform.lock.hcl .terraform.lock.hcl || true
 
-      # POC ONLY: commit terraform.tfstate into the repo.
-      # TODO: Remove this step once state is moved to Azure Blob backend.
-      - name: Commit updated Terraform state (POC only)
+      # ---- POC ONLY ----
+      # Commit terraform.tfstate into repo
+      # TODO: remove this step when moving to Azure Blob backend
+      - name: Commit updated Terraform state
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
