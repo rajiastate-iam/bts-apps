@@ -3,7 +3,8 @@ name: PR Validation (Auth0)
 on:
   pull_request:
     paths:
-      - "apps/**/*.yaml"
+       - "apps/**/*.yaml"
+       - "apps/**/*.yml"
 
 jobs:
   validate-and-plan:
