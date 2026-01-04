@@ -17,24 +17,28 @@ jobs:
     steps:
       - name: Checkout app repo
         uses: actions/checkout@v4
+        with:
+          # ✅ Needed so we have BOTH the before and after commits locally
+          fetch-depth: 0
 
       - name: Install yq
         run: |
           sudo apt-get update
           sudo apt-get install -y yq
 
-      # Find exactly ONE changed app file under apps/ in THIS commit
+      # Find exactly ONE changed app file under apps/ in this push
       - name: Detect changed app file
         id: changed
         run: |
-          COMMIT="${GITHUB_SHA}"
-          echo "Inspecting commit $COMMIT for changed app files"
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
 
-          # List files changed in this commit and filter to apps/*.yml|yaml
-          files=$(git diff-tree --no-commit-id --name-only -r "$COMMIT" | grep '^apps/.*\.ya\?ml$' || true)
+          echo "Diffing $BEFORE..$AFTER to find changed app files"
+
+          files=$(git diff --name-only "$BEFORE" "$AFTER" | grep '^apps/.*\.ya\?ml$' || true)
 
           if [ -z "$files" ]; then
-            echo "No apps/*.yml|yaml files changed in this commit. Nothing to do."
+            echo "No apps/*.yml|yaml files changed in this push. Nothing to do."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
