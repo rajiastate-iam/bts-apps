@@ -4,8 +4,8 @@ on:
   push:
     # Run whenever any app YAML changes in this repo, on any branch
     paths:
-      - "apps/**/*.yaml"
-      - "apps/**/*.yml"
+      - "apps/*.yaml"
+      - "apps/*.yml"
   workflow_dispatch:
 
 jobs:
