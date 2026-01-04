@@ -6,8 +6,8 @@ on:
     branches:
       - main
     paths:
-      - "apps/**/*.yaml"
-      - "apps/**/*.yml"
+      - "apps/*.yaml"
+      - "apps/*.yml"
   workflow_dispatch:
 
 jobs:
@@ -23,17 +23,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y yq
 
-      # Find exactly ONE changed app file under apps/ in this push
+      # Find exactly ONE changed app file under apps/ in THIS commit
       - name: Detect changed app file
         id: changed
         run: |
-          echo "Diffing HEAD^..HEAD to find changed app files"
+          COMMIT="${GITHUB_SHA}"
+          echo "Inspecting commit $COMMIT for changed app files"
 
-          files=$(git diff --name-only HEAD^ HEAD | grep '^apps/.*\.ya\?ml$' || true)
+          # List files changed in this commit and filter to apps/*.yml|yaml
+          files=$(git diff-tree --no-commit-id --name-only -r "$COMMIT" | grep '^apps/.*\.ya\?ml$' || true)
 
           if [ -z "$files" ]; then
-            echo "No apps/*.yml|yaml files changed. Nothing to do."
-            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "No apps/*.yml|yaml files changed in this commit. Nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -49,8 +51,8 @@ jobs:
 
           file="$files"
           echo "Using file: $file"
-          echo "file=$file" >> $GITHUB_OUTPUT
-          echo "skip=false" >> $GITHUB_OUTPUT
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
 
       - name: Stop early if nothing to publish
         if: steps.changed.outputs.skip == 'true'
@@ -71,10 +73,10 @@ jobs:
             exit 1
           fi
 
-          echo "org=$ORG" >> $GITHUB_OUTPUT
-          echo "app=$APP" >> $GITHUB_OUTPUT
-          echo "env=$ENV" >> $GITHUB_OUTPUT
-          echo "file=$FILE" >> $GITHUBOUTPUT
+          echo "org=$ORG"  >> "$GITHUB_OUTPUT"
+          echo "app=$APP"  >> "$GITHUB_OUTPUT"
+          echo "env=$ENV"  >> "$GITHUB_OUTPUT"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
 
       # Build IAM-style path: apps/<ORG>/<APP>-<ENV>.yaml
       - name: Prepare IAM repo file layout
