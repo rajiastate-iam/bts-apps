@@ -2,7 +2,7 @@ name: Publish Auth0 App to IAM
 
 on:
   push:
-    # ✅ Only after merges to main in the apps repo
+    # Only after merges to main in the apps repo
     branches:
       - main
     paths:
@@ -18,13 +18,12 @@ jobs:
       - name: Checkout app repo
         uses: actions/checkout@v4
         with:
-          # Need full history so BEFORE/AFTER SHAs exist locally
           fetch-depth: 0
 
-      - name: Install yq
+      - name: Install tools (yq & jq)
         run: |
           sudo apt-get update
-          sudo apt-get install -y yq
+          sudo apt-get install -y yq jq
 
       # Find exactly ONE changed app file under apps/ in this push
       - name: Detect changed app file
@@ -82,46 +81,73 @@ jobs:
           echo "env=$ENV"  >> "$GITHUB_OUTPUT"
           echo "file=$FILE" >> "$GITHUB_OUTPUT"
 
-      # Build IAM-style path: apps/<ORG>/<APP>-<ENV>.yaml
-      - name: Prepare IAM repo file layout
+      # Clone IAM repo using the IAM PAT (only needs access to auth0-apps)
+      - name: Clone IAM repo
         if: steps.changed.outputs.skip != 'true'
+        env:
+          IAM_TOKEN: ${{ secrets.IAM_REPO_TOKEN }}
         run: |
-          FILE="${{ steps.meta.outputs.file }}"
+          git clone "https://x-access-token:${IAM_TOKEN}@github.com/rajiastate/auth0-apps.git" iam-repo
+          cd iam-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # Copy file into IAM repo layout and push a branch
+      - name: Prepare branch and push to IAM repo
+        if: steps.changed.outputs.skip != 'true'
+        id: push_iam
+        env:
+          IAM_TOKEN: ${{ secrets.IAM_REPO_TOKEN }}
+        run: |
           ORG="${{ steps.meta.outputs.org }}"
           APP="${{ steps.meta.outputs.app }}"
           ENV="${{ steps.meta.outputs.env }}"
+          SRC_FILE="${{ steps.meta.outputs.file }}"
+
+          BRANCH="auto/${ORG}-${APP}-${ENV}-${GITHUB_RUN_ID}"
+          TARGET_FILE="apps/${ORG}/${APP}-${ENV}.yaml"
+
+          echo "Branch: $BRANCH"
+          echo "Target file in IAM repo: $TARGET_FILE"
+
+          cd iam-repo
+          git checkout -b "$BRANCH"
 
           mkdir -p "apps/${ORG}"
-          cp "$FILE" "apps/${ORG}/${APP}-${ENV}.yaml"
+          cp "../${SRC_FILE}" "$TARGET_FILE"
 
-          echo "Prepared IAM file: apps/${ORG}/${APP}-${ENV}.yaml"
+          git add "$TARGET_FILE"
+          git commit -m "Auth0 app registration: ${ORG} / ${APP} / ${ENV}"
+          git push origin "$BRANCH"
 
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "target_file=$TARGET_FILE" >> "$GITHUB_OUTPUT"
+
+      # Open PR in IAM repo using GitHub REST API
       - name: Create PR in IAM repo
         if: steps.changed.outputs.skip != 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          # Fine-grained PAT stored as a secret in this (apps) repo
-          token: ${{ secrets.IAM_REPO_TOKEN }}
+        env:
+          IAM_TOKEN: ${{ secrets.IAM_REPO_TOKEN }}
+        run: |
+          ORG="${{ steps.meta.outputs.org }}"
+          APP="${{ steps.meta.outputs.app }}"
+          ENV="${{ steps.meta.outputs.env }}"
+          SRC_FILE="${{ steps.meta.outputs.file }}"
+          BRANCH="${{ steps.push_iam.outputs.branch }}"
 
-          # IAM repo
-          repository: rajiastate/auth0-apps
+          TITLE="Auth0 App Request: ${ORG} / ${APP} / ${ENV}"
+          BODY="Automated Auth0 app registration request.\n\nSource repo: ${GITHUB_REPOSITORY}\nCommit: ${GITHUB_SHA}\nApp file in apps repo: ${SRC_FILE}\nBranch in IAM repo: ${BRANCH}"
 
-          commit-message: |
-            Auth0 app registration: ${{ steps.meta.outputs.org }} / ${{ steps.meta.outputs.app }} / ${{ steps.meta.outputs.env }}
-          title: |
-            Auth0 App Request: ${{ steps.meta.outputs.org }} / ${{ steps.meta.outputs.app }} / ${{ steps.meta.outputs.env }}
-          body: |
-            Automated Auth0 app registration request.
+          # Build JSON for PR creation
+          json=$(jq -n \
+            --arg title "$TITLE" \
+            --arg head "$BRANCH" \
+            --arg base "master" \
+            --arg body "$BODY" \
+            '{title:$title, head:$head, base:$base, body:$body}')
 
-            Source repo: ${{ github.repository }}
-            Commit: ${{ github.sha }}
-            App file in apps repo: ${{ steps.meta.outputs.file }}
-            Target file in IAM repo: apps/${{ steps.meta.outputs.org }}/${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}.yaml
-
-          # Branch created in IAM repo for this app/env
-          branch: "auto/${{ steps.meta.outputs.org }}-${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}-${{ github.run_id }}"
-          # base omitted -> uses IAM repo's default branch (master)
-
-          # Only include this generated file in the PR
-          add-paths: |
-            apps/${{ steps.meta.outputs.org }}/${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}.yaml
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${IAM_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/rajiastate/auth0-apps/pulls \
+            -d "$json"
