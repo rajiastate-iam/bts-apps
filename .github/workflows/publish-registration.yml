@@ -2,7 +2,7 @@ name: Publish Auth0 App to IAM
 
 on:
   push:
-    branches: ["main"]                # or "master" if that’s your default branch
+    # Run whenever any app YAML changes in this repo, on any branch
     paths:
       - "apps/**/*.yaml"
       - "apps/**/*.yml"
@@ -21,30 +21,35 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y yq
 
-      # Find exactly ONE changed app file under auth0/apps/
-      # and fail if there are multiple (so we keep "one PR per app")
+      # Find exactly ONE changed app file under apps/ in this push
       - name: Detect changed app file
         id: changed
         run: |
-          # Compare this push to previous commit on this branch
-          files=$(git diff --name-only HEAD^ HEAD | grep '^auth0/apps/.*\.ya\?ml$' || true)
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+
+          echo "Comparing $BEFORE..$AFTER"
+
+          files=$(git diff --name-only "$BEFORE" "$AFTER" | grep '^apps/.*\.ya\?ml$' || true)
 
           if [ -z "$files" ]; then
-            echo "No auth0 app files changed. Nothing to do."
+            echo "No apps/*.yml|yaml files changed. Nothing to do."
             echo "skip=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           count=$(echo "$files" | wc -l | tr -d ' ')
+          echo "Changed app files:"
+          echo "$files"
+
           if [ "$count" -ne 1 ]; then
-            echo "ERROR: Expected exactly 1 auth0/apps/*.yml|yaml file to change, but found $count:"
-            echo "$files"
+            echo "ERROR: Expected exactly 1 apps/*.yml|yaml file to change, but found $count."
             echo "Please change only one app file per PR."
             exit 1
           fi
 
           file="$files"
-          echo "Changed file: $file"
+          echo "Using file: $file"
           echo "file=$file" >> $GITHUB_OUTPUT
           echo "skip=false" >> $GITHUB_OUTPUT
 
@@ -62,11 +67,18 @@ jobs:
           APP=$(yq -r '.app' "$FILE")
           ENV=$(yq -r '.env' "$FILE")
 
+          if [ -z "$ORG" ] || [ -z "$APP" ] || [ -z "$ENV" ]; then
+            echo "ERROR: orgname, app, or env is missing in $FILE"
+            exit 1
+          fi
+
           echo "org=$ORG" >> $GITHUB_OUTPUT
           echo "app=$APP" >> $GITHUB_OUTPUT
           echo "env=$ENV" >> $GITHUB_OUTPUT
           echo "file=$FILE" >> $GITHUB_OUTPUT
 
+      # Build IAM-style path: apps/<ORG>/<APP>-<ENV>.yaml
+      # This is the path that will exist in the IAM repo.
       - name: Prepare IAM repo file layout
         if: steps.changed.outputs.skip != 'true'
         run: |
@@ -78,14 +90,17 @@ jobs:
           mkdir -p "apps/${ORG}"
           cp "$FILE" "apps/${ORG}/${APP}-${ENV}.yaml"
 
+          echo "Prepared IAM file: apps/${ORG}/${APP}-${ENV}.yaml"
+
       - name: Create PR in IAM repo
         if: steps.changed.outputs.skip != 'true'
         uses: peter-evans/create-pull-request@v6
         with:
+          # PAT secret in the APPS repo (fine-grained token with Contents+PR perms on IAM repo)
           token: ${{ secrets.IAM_REPO_TOKEN }}
 
-          # IAM infra repo
-          repository: rajiastate/auth0-apps          # <<< change to your IAM repo
+          # 👉 CHANGE THIS to your real IAM repo "org/name"
+          repository: rajiastate/auth0-apps
 
           commit-message: |
             Auth0 app registration: ${{ steps.meta.outputs.org }} / ${{ steps.meta.outputs.app }} / ${{ steps.meta.outputs.env }}
@@ -96,12 +111,13 @@ jobs:
 
             Source repo: ${{ github.repository }}
             Commit: ${{ github.sha }}
-            App file: ${{ steps.meta.outputs.file }}
+            App file in apps repo: ${{ steps.meta.outputs.file }}
+            Target file in IAM repo: apps/${{ steps.meta.outputs.org }}/${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}.yaml
 
-          # One branch per app/env so each PR is app-scoped
+          # Branch created in the IAM repo for this app/env
           branch: "auto/${{ steps.meta.outputs.org }}-${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}-${{ github.run_id }}"
-          base: "master"                           # IAM repo default branch
+          base: "master"   # default branch of IAM repo (change to 'main' if needed)
 
-          # Only include the one generated file under apps/
+          # Only include the one generated IAM file under apps/<ORG>/
           add-paths: |
             apps/${{ steps.meta.outputs.org }}/${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}.yaml
