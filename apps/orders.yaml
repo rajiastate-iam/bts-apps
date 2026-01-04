@@ -12,7 +12,7 @@ granttypes:
   - refresh_token
 
 callbacks:
-  - https://orders-dev.example.com/callback
+  - https://hello/callback
 
 logouturls:
   - https://orders-dev.example.com/logout
