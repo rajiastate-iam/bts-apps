@@ -1,0 +1,28 @@
+orgname: BTS
+servicenow_req: REQ0012345
+
+app: orders-api
+env: dev
+
+displayname: "Orders API (Dev)"
+apptype: regular_web
+
+granttypes:
+  - authorization_code
+  - refresh_token
+
+callbacks:
+  - https://orders-dev.example.com/callback
+
+logouturls:
+  - https://orders-dev.example.com/logout
+
+allowedorigins:
+  - https://orders-dev.example.com
+
+clientmetadata:
+  system: orders
+  owner_team: orders-platform
+  environment: dev
+
+jwtlifetimeinseconds: 3600
