@@ -2,11 +2,12 @@ name: Publish Auth0 App to IAM
 
 on:
   push:
-    # ✅ Only when pushing to main (e.g., after PR merge)
-    branches: ["main"]
+    # ✅ Only after merges to main in the apps repo
+    branches:
+      - main
     paths:
-      - "apps/*.yaml"
-      - "apps/*.yml"
+      - "apps/**/*.yaml"
+      - "apps/**/*.yml"
   workflow_dispatch:
 
 jobs:
@@ -15,7 +16,6 @@ jobs:
 
     steps:
       - name: Checkout app repo
-      # NOTE: this checks out the apps repo itself
         uses: actions/checkout@v4
 
       - name: Install yq
@@ -27,12 +27,9 @@ jobs:
       - name: Detect changed app file
         id: changed
         run: |
-          BEFORE="${{ github.event.before }}"
-          AFTER="${{ github.sha }}"
+          echo "Diffing HEAD^..HEAD to find changed app files"
 
-          echo "Comparing $BEFORE..$AFTER"
-
-          files=$(git diff --name-only "$BEFORE" "$AFTER" | grep '^apps/.*\.ya\?ml$' || true)
+          files=$(git diff --name-only HEAD^ HEAD | grep '^apps/.*\.ya\?ml$' || true)
 
           if [ -z "$files" ]; then
             echo "No apps/*.yml|yaml files changed. Nothing to do."
@@ -77,10 +74,9 @@ jobs:
           echo "org=$ORG" >> $GITHUB_OUTPUT
           echo "app=$APP" >> $GITHUB_OUTPUT
           echo "env=$ENV" >> $GITHUB_OUTPUT
-          echo "file=$FILE" >> $GITHUB_OUTPUT
+          echo "file=$FILE" >> $GITHUBOUTPUT
 
       # Build IAM-style path: apps/<ORG>/<APP>-<ENV>.yaml
-      # This is the path that will exist in the IAM repo.
       - name: Prepare IAM repo file layout
         if: steps.changed.outputs.skip != 'true'
         run: |
@@ -100,7 +96,6 @@ jobs:
         with:
           token: ${{ secrets.IAM_REPO_TOKEN }}
 
-          # IAM repo
           repository: rajiastate/auth0-apps
 
           commit-message: |
