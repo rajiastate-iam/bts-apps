@@ -18,7 +18,7 @@ jobs:
       - name: Checkout app repo
         uses: actions/checkout@v4
         with:
-          # ✅ Needed so we have BOTH the before and after commits locally
+          # Need full history so BEFORE/AFTER SHAs exist locally
           fetch-depth: 0
 
       - name: Install yq
@@ -100,8 +100,10 @@ jobs:
         if: steps.changed.outputs.skip != 'true'
         uses: peter-evans/create-pull-request@v6
         with:
+          # Fine-grained PAT stored as a secret in this (apps) repo
           token: ${{ secrets.IAM_REPO_TOKEN }}
 
+          # IAM repo
           repository: rajiastate/auth0-apps
 
           commit-message: |
@@ -116,8 +118,10 @@ jobs:
             App file in apps repo: ${{ steps.meta.outputs.file }}
             Target file in IAM repo: apps/${{ steps.meta.outputs.org }}/${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}.yaml
 
+          # Branch created in IAM repo for this app/env
           branch: "auto/${{ steps.meta.outputs.org }}-${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}-${{ github.run_id }}"
-          base: "master"   # change to 'main' if auth0-apps default branch is main
+          # base omitted -> uses IAM repo's default branch (master)
 
+          # Only include this generated file in the PR
           add-paths: |
             apps/${{ steps.meta.outputs.org }}/${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}.yaml
