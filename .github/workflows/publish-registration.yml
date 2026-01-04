@@ -2,7 +2,8 @@ name: Publish Auth0 App to IAM
 
 on:
   push:
-    # Run whenever any app YAML changes in this repo, on any branch
+    # ✅ Only when pushing to main (e.g., after PR merge)
+    branches: ["main"]
     paths:
       - "apps/*.yaml"
       - "apps/*.yml"
@@ -14,6 +15,7 @@ jobs:
 
     steps:
       - name: Checkout app repo
+      # NOTE: this checks out the apps repo itself
         uses: actions/checkout@v4
 
       - name: Install yq
@@ -96,10 +98,9 @@ jobs:
         if: steps.changed.outputs.skip != 'true'
         uses: peter-evans/create-pull-request@v6
         with:
-          # PAT secret in the APPS repo (fine-grained token with Contents+PR perms on IAM repo)
           token: ${{ secrets.IAM_REPO_TOKEN }}
 
-          # 👉 CHANGE THIS to your real IAM repo "org/name"
+          # IAM repo
           repository: rajiastate/auth0-apps
 
           commit-message: |
@@ -114,10 +115,8 @@ jobs:
             App file in apps repo: ${{ steps.meta.outputs.file }}
             Target file in IAM repo: apps/${{ steps.meta.outputs.org }}/${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}.yaml
 
-          # Branch created in the IAM repo for this app/env
           branch: "auto/${{ steps.meta.outputs.org }}-${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}-${{ github.run_id }}"
-          base: "master"   # default branch of IAM repo (change to 'main' if needed)
+          base: "master"   # change to 'main' if auth0-apps default branch is main
 
-          # Only include the one generated IAM file under apps/<ORG>/
           add-paths: |
             apps/${{ steps.meta.outputs.org }}/${{ steps.meta.outputs.app }}-${{ steps.meta.outputs.env }}.yaml
