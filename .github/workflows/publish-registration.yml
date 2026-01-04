@@ -4,8 +4,8 @@ on:
   push:
     branches: ["main"]                # or "master" if that’s your default branch
     paths:
-      - "auth0/apps/**/*.yaml"
-      - "auth0/apps/**/*.yml"
+      - "apps/**/*.yaml"
+      - "apps/**/*.yml"
   workflow_dispatch:
 
 jobs:
