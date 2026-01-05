@@ -1,0 +1,71 @@
+
+# ===========================
+# Auth0 Application Request
+# Fill out all required fields below.
+# Comments explain what each field means.
+# ===========================
+
+# Business unit, tribe, or organizational group
+orgname: <ORG_NAME>
+
+# Required ServiceNow request or change ticket for audit
+servicenow_req: <SERVICENOW_REQUEST_NUMBER>
+
+# Short name for this app (used for naming in Auth0)
+app: <APP_NAME>
+
+# Environment where this app registration applies (dev | test | stage | prod)
+env: <ENVIRONMENT>
+
+# Display name that will appear in Auth0 Dashboard
+# Include environment for clarity
+displayname: "<DISPLAY_NAME>"
+
+# Auth0 application type:
+#   regular_web = server-rendered web apps
+#   spa         = single-page web apps (React, Angular, Vue)
+#   native      = iOS/Android/native desktop apps
+#   m2m         = machine-to-machine client (no browser interaction)
+#   backend     = backend services calling APIs
+apptype: <APP_TYPE>
+
+# OAuth2/OIDC grant types required by the application.
+# Common examples:
+#   authorization_code  → standard login flow
+#   refresh_token       → allows refresh tokens
+#   client_credentials  → used for M2M apps only
+granttypes:
+  - <GRANT_TYPE_1>
+  - <GRANT_TYPE_2>
+
+# List all redirect URIs used after login.
+# These must match EXACTLY what the application uses.
+callbacks:
+  - <CALLBACK_URL_1>
+
+# List all post-logout redirect URIs.
+# Auth0 will redirect users here after logout.
+logouturls:
+  - <LOGOUT_URL_1>
+
+# Allowed origins used for CORS and silent authentication.
+# Usually matches your app's base URL.
+allowedorigins:
+  - <ALLOWED_ORIGIN_1>
+
+# Additional metadata stored in Auth0's client_metadata field.
+# Used for automation, tagging, and ownership tracking.
+clientmetadata:
+  # System or program this app belongs to
+  system: <SYSTEM_NAME>
+
+  # Team responsible for maintaining the application
+  owner_team: <TEAM_NAME>
+
+  # Environment tag (same as top-level env)
+  environment: <ENVIRONMENT>
+
+# Access token lifetime in seconds (Auth0: jwt_configuration.lifetime_in_seconds)
+# Typical values: 3600 (1 hour), 1800 (30 mins), 900 (15 mins)
+jwtlifetimeinseconds: <JWT_LIFETIME_SECONDS>
+
