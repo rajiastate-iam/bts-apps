@@ -1,0 +1,28 @@
+orgname: VEL
+servicenow_req: REQ0012345
+
+app: VEL-api
+env: dev
+
+displayname: "VEL APP (Dev)"
+apptype: regular_web
+
+granttypes:
+  - authorization_code
+  - refresh_token
+
+callbacks:
+  - https://vela-dev.example.com/callback
+
+logouturls:
+  - https://VEL-dev.example.com/logout
+
+allowedorigins:
+  - https://VEL-dev.example.com
+
+clientmetadata:
+  system: VEL
+  owner_team: VEL-platform
+  environment: dev
+
+jwtlifetimeinseconds: 3600
