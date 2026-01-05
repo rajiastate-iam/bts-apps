@@ -12,7 +12,7 @@ granttypes:
   - refresh_token
 
 callbacks:
-  - https://VEL-dev.example.com/callback
+  - https://vela-dev.example.com/callback
 
 logouturls:
   - https://VEL-dev.example.com/logout
