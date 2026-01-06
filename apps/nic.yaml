@@ -5,7 +5,7 @@ app: NIC-api
 env: dev
 
 displayname: "NIC APP (Dev)"
-app_type: regular_web
+apptype: regular_web
 
 granttypes:
   - authorization_code
