@@ -1,4 +1,4 @@
-name: PR Validation (Auth0)
+-name: PR Validation (Auth0)
 
 on:
   pull_request:
