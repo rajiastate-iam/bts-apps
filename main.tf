@@ -27,7 +27,7 @@ module "auth0_app" {
   allowed_origins          = try(each.value.allowedorigins, [])
   grant_types              = each.value.granttypes
   client_metadata          = try(each.value.clientmetadata, {})
-  jwt_lifetime_in_seconds  = try(each.value.jwtlifetimeinseconds, 3600)
+  jwt_lifetime_in_seconds = try(tonumber(each.value.jwtlifetimeinseconds), 3600)
 
   org_name       = each.value.orgname
   servicenow_req = each.value.servicenow_req
