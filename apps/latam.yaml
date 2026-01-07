@@ -1,0 +1,28 @@
+orgname: GEM
+servicenow_req: REQ0012345
+
+app: GEM-api
+env: dev
+
+displayname: "GEM APP (Dev)"
+apptype: regular_web
+
+granttypes:
+  - authorization_code
+  - refresh_token
+
+callbacks:
+  - https://GEMa-dev.example.com/callback
+
+logouturls:
+  - https://EgebV-dev.example.com/logout
+
+allowedorigins:
+  - https://Ebv-dev.example.com
+
+clientmetadata:
+  system: GEM
+  owner_team: GEM-platform
+  environment: dev
+
+jwtlifetimeinseconds: 3600
