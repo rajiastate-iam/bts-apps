@@ -29,22 +29,34 @@ jobs:
           $after  = "${{ github.sha }}"
 
           Write-Host "Diffing $before..$after"
-          $files = git diff --name-only $before $after | Where-Object { $_ -match '^apps/.*\.ya?ml$' }
 
-          if (-not $files) {
+          # Force into array so indexing returns a filename, not a character
+          $changed = @(git diff --name-only $before $after)
+
+          Write-Host "All changed files:"
+          $changed | ForEach-Object { Write-Host " - $_" }
+
+          $files = @($changed | Where-Object { $_ -match '^apps/.*\.ya?ml$' })
+
+          Write-Host "Filtered app YAML files:"
+          $files | ForEach-Object { Write-Host " * $_" }
+
+          if ($files.Count -eq 0) {
             Write-Host "No apps/*.yml|yaml changed."
-            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
             exit 0
           }
 
           if ($files.Count -ne 1) {
             Write-Error "Expected exactly 1 apps/*.yml|yaml file change, found $($files.Count)."
-            $files | ForEach-Object { Write-Host $_ }
             exit 1
           }
 
-          "file=$($files[0])" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "skip=false"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $file = $files[0].Trim()
+          Write-Host "Using file: $file"
+
+          "file=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Read metadata from changed app file
         if: steps.changed.outputs.skip != 'true'
@@ -54,6 +66,16 @@ jobs:
           $file = "${{ steps.changed.outputs.file }}"
           Write-Host "Reading metadata from $file"
 
+          if (-not (Test-Path $file)) {
+            Write-Error "File not found: $file"
+            exit 1
+          }
+
+          if (-not (Get-Command ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
+            Install-Module powershell-yaml -Scope CurrentUser -Force
+            Import-Module powershell-yaml
+          }
+
           $yaml = Get-Content $file -Raw
           $obj  = $yaml | ConvertFrom-Yaml
 
@@ -62,10 +84,10 @@ jobs:
             exit 1
           }
 
-          "org=$($obj.orgname)" | Out-File $env:GITHUB_OUTPUT -Append
-          "app=$($obj.app)"     | Out-File $env:GITHUB_OUTPUT -Append
-          "env=$($obj.env)"     | Out-File $env:GITHUB_OUTPUT -Append
-          "file=$file"          | Out-File $env:GITHUB_OUTPUT -Append
+          "org=$($obj.orgname)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "app=$($obj.app)"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "env=$($obj.env)"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "file=$file"          | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Dispatch request to pim-auth0
         if: steps.changed.outputs.skip != 'true'
@@ -87,7 +109,7 @@ jobs:
             }
           } | ConvertTo-Json -Depth 6
 
-          $uri = "https://api.github.com/repos/$env:IAM_OWNER/$env:IAM_REPO/dispatches"
+          $uri = "https://api.github.com/repos/$($env:IAM_OWNER)/$($env:IAM_REPO)/dispatches"
 
           Invoke-RestMethod `
             -Method POST `
