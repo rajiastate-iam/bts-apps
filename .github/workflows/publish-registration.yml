@@ -1,4 +1,4 @@
-name: Publish Auth0 App to IAM (No PAT)
+name: Publish Auth0 App to IAM (GitHub App Token, No PAT)
 
 on:
   push:
@@ -28,33 +28,19 @@ jobs:
           $before = "${{ github.event.before }}"
           $after  = "${{ github.sha }}"
 
-          Write-Host "Diffing $before..$after"
-
-          # Force into array so indexing returns a filename, not a character
           $changed = @(git diff --name-only $before $after)
-
-          Write-Host "All changed files:"
-          $changed | ForEach-Object { Write-Host " - $_" }
-
           $files = @($changed | Where-Object { $_ -match '^apps/.*\.ya?ml$' })
 
-          Write-Host "Filtered app YAML files:"
-          $files | ForEach-Object { Write-Host " * $_" }
-
           if ($files.Count -eq 0) {
-            Write-Host "No apps/*.yml|yaml changed."
             "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
             exit 0
           }
 
           if ($files.Count -ne 1) {
-            Write-Error "Expected exactly 1 apps/*.yml|yaml file change, found $($files.Count)."
-            exit 1
+            throw "Expected exactly 1 apps/*.yml|yaml file change, found $($files.Count)."
           }
 
           $file = $files[0].Trim()
-          Write-Host "Using file: $file"
-
           "file=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
@@ -64,12 +50,6 @@ jobs:
         shell: pwsh
         run: |
           $file = "${{ steps.changed.outputs.file }}"
-          Write-Host "Reading metadata from $file"
-
-          if (-not (Test-Path $file)) {
-            Write-Error "File not found: $file"
-            exit 1
-          }
 
           if (-not (Get-Command ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
             Install-Module powershell-yaml -Scope CurrentUser -Force
@@ -80,8 +60,7 @@ jobs:
           $obj  = $yaml | ConvertFrom-Yaml
 
           if (-not $obj.orgname -or -not $obj.app -or -not $obj.env) {
-            Write-Error "Missing orgname/app/env in $file"
-            exit 1
+            throw "Missing orgname/app/env in $file"
           }
 
           "org=$($obj.orgname)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -89,11 +68,20 @@ jobs:
           "env=$($obj.env)"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "file=$file"          | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+      # Mint a short-lived installation token for the GitHub App
+      - name: Get GitHub App token
+        if: steps.changed.outputs.skip != 'true'
+        id: app-token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.AUTH0_GHAPP_ID }}
+          private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
+
       - name: Dispatch request to pim-auth0
         if: steps.changed.outputs.skip != 'true'
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           IAM_OWNER: rajiastate
           IAM_REPO: auth0-apps
         run: |
@@ -120,5 +108,3 @@ jobs:
               "User-Agent"  = "github-actions"
             } `
             -Body $payload
-
-          Write-Host "Dispatched request to $uri"
