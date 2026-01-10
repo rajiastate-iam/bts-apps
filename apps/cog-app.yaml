@@ -1,0 +1,28 @@
+orgname: Cog
+servicenow_req: REQ0012345
+
+app: Cog-api
+Cog: dev
+
+displayname: "Cog APP (Dev)"
+apptype: regular_web
+
+granttypes:
+  - authorization_code
+  - refresh_token
+
+callbacks:
+  - https://Coga-dev.example.com/callback
+
+logouturls:
+  - https://Cog-dev.example.com/logout
+
+allowedorigins:
+  - https://Cog-dev.example.com
+
+clientmetadata:
+  system: Cog
+  owner_team: Cog-platform
+  Cogironment: dev
+
+jwtlifetimeinseconds: 3600
