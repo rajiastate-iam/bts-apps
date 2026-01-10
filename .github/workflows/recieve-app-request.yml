@@ -18,21 +18,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Print raw event (debug)
-        shell: pwsh
-        run: |
-          Write-Host "Event name: $env:GITHUB_EVENT_NAME"
-          Write-Host "Event path: $env:GITHUB_EVENT_PATH"
-          $raw = Get-Content $env:GITHUB_EVENT_PATH -Raw
-          Write-Host $raw
-
       - name: Extract payload (strict)
         id: p
         shell: pwsh
         run: |
           $event = Get-Content $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
           if (-not $event.client_payload) { throw "Missing client_payload" }
-
           $cp = $event.client_payload
 
           $srcRepo = [string]$cp.src_repo
@@ -42,13 +33,9 @@ jobs:
           $app     = [string]$cp.app
           $envName = [string]$cp.env
 
-          Write-Host "Parsed payload:"
-          Write-Host "  src_repo = $srcRepo"
-          Write-Host "  src_sha  = $srcSha"
-          Write-Host "  src_file = $srcFile"
-          Write-Host "  org      = $org"
-          Write-Host "  app      = $app"
-          Write-Host "  env      = $envName"
+          Write-Host "repo=$srcRepo"
+          Write-Host "sha =$srcSha"
+          Write-Host "file=$srcFile"
 
           foreach ($pair in @(
             "src_repo=$srcRepo",
@@ -70,7 +57,7 @@ jobs:
 
           if ($srcRepo -notmatch '^rajiastate\/') { throw "src_repo not allowed: $srcRepo" }
           if ($srcSha -notmatch '^[0-9a-f]{7,40}$') { throw "src_sha invalid: $srcSha" }
-          if ($srcFile -notmatch '^apps\/.*\.ya?ml$') { throw "src_file invalid: '$srcFile' (must be apps/*.yml|yaml)" }
+          if ($srcFile -notmatch '^apps\/.*\.ya?ml$') { throw "src_file invalid: '$srcFile'" }
 
       - name: Get GitHub App token (read source repo)
         id: app-token
@@ -79,21 +66,26 @@ jobs:
           app_id: ${{ secrets.AUTH0_GHAPP_ID }}
           private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
 
-      - name: Download YAML from source repo at exact commit
+      - name: Download YAML from source repo at exact commit (correct URL)
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           $repo = "${{ steps.p.outputs.src_repo }}"
           $sha  = "${{ steps.p.outputs.src_sha }}"
-          $file = "${{ steps.p.outputs.src_file }}"
+          $path = "${{ steps.p.outputs.src_file }}"
+
+          # Build URL safely (path must be the file path)
+          $uri = "https://api.github.com/repos/{0}/contents/{1}?ref={2}" -f $repo, $path, $sha
 
           Write-Host "repo=$repo"
           Write-Host "sha =$sha"
-          Write-Host "file=$file"
-
-          $uri = "https://api.github.com/repos/$repo/contents/$file?ref=$sha"
+          Write-Host "path=$path"
           Write-Host "Downloading: $uri"
+
+          # Guardrails: if URL looks wrong, fail immediately
+          if ($uri -match "/contents/=") { throw "BUG: URL contains /contents/= (wrong path). URL=$uri" }
+          if ($uri -match "/contents/[0-9a-f]{20,40}\?ref=") { throw "BUG: URL path looks like SHA, not file. URL=$uri" }
 
           $resp = Invoke-RestMethod `
             -Uri $uri `
