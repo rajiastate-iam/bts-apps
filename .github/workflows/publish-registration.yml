@@ -30,7 +30,14 @@ jobs:
 
           Write-Host "Diffing $before..$after"
           $changed = @(git diff --name-only $before $after)
+
+          Write-Host "All changed files:"
+          $changed | ForEach-Object { Write-Host " - $_" }
+
           $files = @($changed | Where-Object { $_ -match '^apps/.*\.ya?ml$' })
+
+          Write-Host "App YAML files changed:"
+          $files | ForEach-Object { Write-Host " * $_" }
 
           if ($files.Count -eq 0) {
             Write-Host "No apps/*.yml|yaml changed."
@@ -56,6 +63,10 @@ jobs:
           $file = "${{ steps.changed.outputs.file }}"
           Write-Host "Reading metadata from $file"
 
+          if (-not (Test-Path $file)) {
+            throw "File not found: $file"
+          }
+
           if (-not (Get-Command ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
             Install-Module powershell-yaml -Scope CurrentUser -Force
             Import-Module powershell-yaml
@@ -72,6 +83,8 @@ jobs:
           "app=$($obj.app)"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "env=$($obj.env)"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+          Write-Host "Parsed metadata: org=$($obj.orgname) app=$($obj.app) env=$($obj.env)"
+
       - name: Get GitHub App token
         if: steps.changed.outputs.skip != 'true'
         id: app-token
@@ -86,7 +99,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          $srcFile = "${{ steps.changed.outputs.file }}"   # <-- IMPORTANT: use changed file directly
+          $srcFile = "${{ steps.changed.outputs.file }}"   # <-- MUST be the path like apps/cog.yaml
 
           $payloadObj = @{
             event_type = "auth0_app_request"
@@ -100,11 +113,12 @@ jobs:
             }
           }
 
-          Write-Host "Dispatch payload object:"
+          Write-Host "Dispatch payload:"
           $payloadObj | ConvertTo-Json -Depth 6 | Write-Host
 
           $payload = $payloadObj | ConvertTo-Json -Depth 6
           $uri = "https://api.github.com/repos/rajiastate/auth0-apps/dispatches"
+          Write-Host "Dispatch URL: $uri"
 
           $resp = Invoke-WebRequest `
             -Method POST `
