@@ -28,10 +28,18 @@ jobs:
           $before = "${{ github.event.before }}"
           $after  = "${{ github.sha }}"
 
+          Write-Host "Diffing $before..$after"
+
           $changed = @(git diff --name-only $before $after)
+          Write-Host "All changed files:"
+          $changed | ForEach-Object { Write-Host " - $_" }
+
           $files = @($changed | Where-Object { $_ -match '^apps/.*\.ya?ml$' })
+          Write-Host "Filtered app YAML files:"
+          $files | ForEach-Object { Write-Host " * $_" }
 
           if ($files.Count -eq 0) {
+            Write-Host "No apps/*.yml|yaml changed."
             "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
             exit 0
           }
@@ -41,6 +49,8 @@ jobs:
           }
 
           $file = $files[0].Trim()
+          Write-Host "Using file: $file"
+
           "file=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
@@ -50,6 +60,11 @@ jobs:
         shell: pwsh
         run: |
           $file = "${{ steps.changed.outputs.file }}"
+          Write-Host "Reading metadata from $file"
+
+          if (-not (Test-Path $file)) {
+            throw "File not found: $file"
+          }
 
           if (-not (Get-Command ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
             Install-Module powershell-yaml -Scope CurrentUser -Force
@@ -68,7 +83,6 @@ jobs:
           "env=$($obj.env)"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "file=$file"          | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      # Mint a short-lived installation token for the GitHub App
       - name: Get GitHub App token
         if: steps.changed.outputs.skip != 'true'
         id: app-token
@@ -77,7 +91,7 @@ jobs:
           app_id: ${{ secrets.AUTH0_GHAPP_ID }}
           private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
 
-      - name: Dispatch request to pim-auth0
+      - name: Dispatch request to auth0-apps (print status)
         if: steps.changed.outputs.skip != 'true'
         shell: pwsh
         env:
@@ -98,8 +112,9 @@ jobs:
           } | ConvertTo-Json -Depth 6
 
           $uri = "https://api.github.com/repos/$($env:IAM_OWNER)/$($env:IAM_REPO)/dispatches"
+          Write-Host "Dispatch URL: $uri"
 
-          Invoke-RestMethod `
+          $resp = Invoke-WebRequest `
             -Method POST `
             -Uri $uri `
             -Headers @{
@@ -108,3 +123,5 @@ jobs:
               "User-Agent"  = "github-actions"
             } `
             -Body $payload
+
+          Write-Host "Dispatch HTTP status: $($resp.StatusCode)"
