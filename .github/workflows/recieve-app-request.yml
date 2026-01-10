@@ -22,6 +22,7 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Event name: $env:GITHUB_EVENT_NAME"
+          Write-Host "Event path: $env:GITHUB_EVENT_PATH"
           $raw = Get-Content $env:GITHUB_EVENT_PATH -Raw
           Write-Host $raw
 
@@ -30,11 +31,10 @@ jobs:
         shell: pwsh
         run: |
           $event = Get-Content $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
-
           if (-not $event.client_payload) { throw "Missing client_payload" }
+
           $cp = $event.client_payload
 
-          # Pull values explicitly
           $srcRepo = [string]$cp.src_repo
           $srcSha  = [string]$cp.src_sha
           $srcFile = [string]$cp.src_file
@@ -87,6 +87,10 @@ jobs:
           $repo = "${{ steps.p.outputs.src_repo }}"
           $sha  = "${{ steps.p.outputs.src_sha }}"
           $file = "${{ steps.p.outputs.src_file }}"
+
+          Write-Host "repo=$repo"
+          Write-Host "sha =$sha"
+          Write-Host "file=$file"
 
           $uri = "https://api.github.com/repos/$repo/contents/$file?ref=$sha"
           Write-Host "Downloading: $uri"
