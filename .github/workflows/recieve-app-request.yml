@@ -18,48 +18,71 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Extract payload
+      - name: Print raw event (debug)
+        shell: pwsh
+        run: |
+          Write-Host "Event name: $env:GITHUB_EVENT_NAME"
+          $raw = Get-Content $env:GITHUB_EVENT_PATH -Raw
+          Write-Host $raw
+
+      - name: Extract payload (strict)
         id: p
         shell: pwsh
         run: |
           $event = Get-Content $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
+
+          if (-not $event.client_payload) { throw "Missing client_payload" }
           $cp = $event.client_payload
 
-          if (-not $cp) { throw "Missing client_payload in repository_dispatch event" }
+          # Pull values explicitly
+          $srcRepo = [string]$cp.src_repo
+          $srcSha  = [string]$cp.src_sha
+          $srcFile = [string]$cp.src_file
+          $org     = [string]$cp.org
+          $app     = [string]$cp.app
+          $envName = [string]$cp.env
 
-          "src_repo=$($cp.src_repo)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "src_sha=$($cp.src_sha)"   | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "src_file=$($cp.src_file)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "org=$($cp.org)"           | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "app=$($cp.app)"           | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "env=$($cp.env)"           | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Parsed payload:"
+          Write-Host "  src_repo = $srcRepo"
+          Write-Host "  src_sha  = $srcSha"
+          Write-Host "  src_file = $srcFile"
+          Write-Host "  org      = $org"
+          Write-Host "  app      = $app"
+          Write-Host "  env      = $envName"
 
-          Write-Host "Payload:"
-          Write-Host "  repo=$($cp.src_repo)"
-          Write-Host "  sha =$($cp.src_sha)"
-          Write-Host "  file=$($cp.src_file)"
-          Write-Host "  org =$($cp.org)"
-          Write-Host "  app =$($cp.app)"
-          Write-Host "  env =$($cp.env)"
+          foreach ($pair in @(
+            "src_repo=$srcRepo",
+            "src_sha=$srcSha",
+            "src_file=$srcFile",
+            "org=$org",
+            "app=$app",
+            "env=$envName"
+          )) {
+            $pair | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
 
-      - name: Enforce allowlist and safe path
+      - name: Validate payload (safe)
         shell: pwsh
         run: |
           $srcRepo = "${{ steps.p.outputs.src_repo }}"
+          $srcSha  = "${{ steps.p.outputs.src_sha }}"
           $srcFile = "${{ steps.p.outputs.src_file }}"
 
-          if ($srcRepo -notmatch '^rajiastate\/') {
-            throw "src_repo not allowed: $srcRepo"
-          }
+          if ($srcRepo -notmatch '^rajiastate\/') { throw "src_repo not allowed: $srcRepo" }
+          if ($srcSha -notmatch '^[0-9a-f]{7,40}$') { throw "src_sha invalid: $srcSha" }
+          if ($srcFile -notmatch '^apps\/.*\.ya?ml$') { throw "src_file invalid: '$srcFile' (must be apps/*.yml|yaml)" }
 
-          if ($srcFile -notmatch '^apps\/.*\.ya?ml$') {
-            throw "src_file must be apps/*.yml|yaml. Got: $srcFile"
-          }
+      - name: Get GitHub App token (read source repo)
+        id: app-token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.AUTH0_GHAPP_ID }}
+          private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
 
       - name: Download YAML from source repo at exact commit
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           $repo = "${{ steps.p.outputs.src_repo }}"
           $sha  = "${{ steps.p.outputs.src_sha }}"
@@ -93,10 +116,10 @@ jobs:
         run: |
           $org = "${{ steps.p.outputs.org }}"
           $app = "${{ steps.p.outputs.app }}"
-          $env = "${{ steps.p.outputs.env }}"
+          $envName = "${{ steps.p.outputs.env }}"
 
-          $branch = "auto/$org-$app-$env-${{ github.run_id }}"
-          $target = "apps/$org/$app-$env.yaml"
+          $branch = "auto/$org-$app-$envName-${{ github.run_id }}"
+          $target = "apps/$org/$app-$envName.yaml"
 
           git checkout -b $branch
           New-Item -ItemType Directory -Force -Path "apps/$org" | Out-Null
@@ -106,7 +129,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add $target
-          git commit -m "Auth0 app request: $org / $app / $env"
+          git commit -m "Auth0 app request: $org / $app / $envName"
           git push origin $branch
 
           "branch=$branch" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -119,7 +142,7 @@ jobs:
         run: |
           $title = "Auth0 App Request: ${{ steps.p.outputs.org }} / ${{ steps.p.outputs.app }} / ${{ steps.p.outputs.env }}"
 
-          $bodyLines = @(
+          $body = @(
             "Automated Auth0 app registration request.",
             "",
             "Source repo: ${{ steps.p.outputs.src_repo }}",
@@ -127,8 +150,7 @@ jobs:
             "Source file: ${{ steps.p.outputs.src_file }}",
             "",
             "Target file: ${{ steps.commit.outputs.target }}"
-          )
-          $body = $bodyLines -join "`n"
+          ) -join "`n"
 
           $payload = @{
             title = $title
@@ -137,11 +159,9 @@ jobs:
             body  = $body
           } | ConvertTo-Json -Depth 6
 
-          $uri = "https://api.github.com/repos/${{ github.repository }}/pulls"
-
           Invoke-RestMethod `
             -Method POST `
-            -Uri $uri `
+            -Uri "https://api.github.com/repos/${{ github.repository }}/pulls" `
             -Headers @{
               Authorization = "Bearer $env:GH_TOKEN"
               Accept        = "application/vnd.github+json"
