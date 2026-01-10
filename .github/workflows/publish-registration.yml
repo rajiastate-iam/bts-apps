@@ -1,14 +1,15 @@
-name: Publish Auth0 App to IAM
+name: Publish Auth0 App to IAM 
 
 on:
   push:
-    # Only after merges to main in the apps repo
-    branches:
-      - main
+    branches: [main]
     paths:
       - "apps/*.yaml"
       - "apps/*.yml"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   publish:
@@ -20,134 +21,82 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install tools (yq & jq)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y yq jq
-
-      # Find exactly ONE changed app file under apps/ in this push
       - name: Detect changed app file
         id: changed
+        shell: pwsh
         run: |
-          BEFORE="${{ github.event.before }}"
-          AFTER="${{ github.sha }}"
+          $before = "${{ github.event.before }}"
+          $after  = "${{ github.sha }}"
 
-          echo "Diffing $BEFORE..$AFTER to find changed app files"
+          Write-Host "Diffing $before..$after"
+          $files = git diff --name-only $before $after | Where-Object { $_ -match '^apps/.*\.ya?ml$' }
 
-          files=$(git diff --name-only "$BEFORE" "$AFTER" | grep '^apps/.*\.ya\?ml$' || true)
-
-          if [ -z "$files" ]; then
-            echo "No apps/*.yml|yaml files changed in this push. Nothing to do."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+          if (-not $files) {
+            Write-Host "No apps/*.yml|yaml changed."
+            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
             exit 0
-          fi
+          }
 
-          count=$(echo "$files" | wc -l | tr -d ' ')
-          echo "Changed app files:"
-          echo "$files"
-
-          if [ "$count" -ne 1 ]; then
-            echo "ERROR: Expected exactly 1 apps/*.yml|yaml file to change, but found $count."
-            echo "Please change only one app file per PR."
+          if ($files.Count -ne 1) {
+            Write-Error "Expected exactly 1 apps/*.yml|yaml file change, found $($files.Count)."
+            $files | ForEach-Object { Write-Host $_ }
             exit 1
-          fi
+          }
 
-          file="$files"
-          echo "Using file: $file"
-          echo "file=$file" >> "$GITHUB_OUTPUT"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-
-      - name: Stop early if nothing to publish
-        if: steps.changed.outputs.skip == 'true'
-        run: echo "Skipping publish – no app file changed."
+          "file=$($files[0])" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "skip=false"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Read metadata from changed app file
         if: steps.changed.outputs.skip != 'true'
         id: meta
+        shell: pwsh
         run: |
-          FILE="${{ steps.changed.outputs.file }}"
+          $file = "${{ steps.changed.outputs.file }}"
+          Write-Host "Reading metadata from $file"
 
-          ORG=$(yq -r '.orgname' "$FILE")
-          APP=$(yq -r '.app' "$FILE")
-          ENV=$(yq -r '.env' "$FILE")
+          $yaml = Get-Content $file -Raw
+          $obj  = $yaml | ConvertFrom-Yaml
 
-          if [ -z "$ORG" ] || [ -z "$APP" ] || [ -z "$ENV" ]; then
-            echo "ERROR: orgname, app, or env is missing in $FILE"
+          if (-not $obj.orgname -or -not $obj.app -or -not $obj.env) {
+            Write-Error "Missing orgname/app/env in $file"
             exit 1
-          fi
+          }
 
-          echo "org=$ORG"  >> "$GITHUB_OUTPUT"
-          echo "app=$APP"  >> "$GITHUB_OUTPUT"
-          echo "env=$ENV"  >> "$GITHUB_OUTPUT"
-          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          "org=$($obj.orgname)" | Out-File $env:GITHUB_OUTPUT -Append
+          "app=$($obj.app)"     | Out-File $env:GITHUB_OUTPUT -Append
+          "env=$($obj.env)"     | Out-File $env:GITHUB_OUTPUT -Append
+          "file=$file"          | Out-File $env:GITHUB_OUTPUT -Append
 
-      # Clone IAM repo using the IAM PAT (only needs access to auth0-apps)
-      - name: Clone IAM repo
+      - name: Dispatch request to pim-auth0
         if: steps.changed.outputs.skip != 'true'
+        shell: pwsh
         env:
-          IAM_TOKEN: ${{ secrets.IAM_REPO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          IAM_OWNER: rajiastate
+          IAM_REPO: auth0-apps
         run: |
-          git clone "https://x-access-token:${IAM_TOKEN}@github.com/rajiastate/auth0-apps.git" iam-repo
-          cd iam-repo
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          $payload = @{
+            event_type = "auth0_app_request"
+            client_payload = @{
+              src_repo = "${{ github.repository }}"
+              src_sha  = "${{ github.sha }}"
+              src_file = "${{ steps.meta.outputs.file }}"
+              org      = "${{ steps.meta.outputs.org }}"
+              app      = "${{ steps.meta.outputs.app }}"
+              env      = "${{ steps.meta.outputs.env }}"
+            }
+          } | ConvertTo-Json -Depth 6
 
-      # Copy file into IAM repo layout and push a branch
-      - name: Prepare branch and push to IAM repo
-        if: steps.changed.outputs.skip != 'true'
-        id: push_iam
-        env:
-          IAM_TOKEN: ${{ secrets.IAM_REPO_TOKEN }}
-        run: |
-          ORG="${{ steps.meta.outputs.org }}"
-          APP="${{ steps.meta.outputs.app }}"
-          ENV="${{ steps.meta.outputs.env }}"
-          SRC_FILE="${{ steps.meta.outputs.file }}"
+          $uri = "https://api.github.com/repos/$env:IAM_OWNER/$env:IAM_REPO/dispatches"
 
-          BRANCH="auto/${ORG}-${APP}-${ENV}-${GITHUB_RUN_ID}"
-          TARGET_FILE="apps/${ORG}/${APP}-${ENV}.yaml"
+          Invoke-RestMethod `
+            -Method POST `
+            -Uri $uri `
+            -Headers @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept        = "application/vnd.github+json"
+              "User-Agent"  = "github-actions"
+            } `
+            -Body $payload
 
-          echo "Branch: $BRANCH"
-          echo "Target file in IAM repo: $TARGET_FILE"
-
-          cd iam-repo
-          git checkout -b "$BRANCH"
-
-          mkdir -p "apps/${ORG}"
-          cp "../${SRC_FILE}" "$TARGET_FILE"
-
-          git add "$TARGET_FILE"
-          git commit -m "Auth0 app registration: ${ORG} / ${APP} / ${ENV}"
-          git push origin "$BRANCH"
-
-          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-          echo "target_file=$TARGET_FILE" >> "$GITHUB_OUTPUT"
-
-      # Open PR in IAM repo using GitHub REST API
-      - name: Create PR in IAM repo
-        if: steps.changed.outputs.skip != 'true'
-        env:
-          IAM_TOKEN: ${{ secrets.IAM_REPO_TOKEN }}
-        run: |
-          ORG="${{ steps.meta.outputs.org }}"
-          APP="${{ steps.meta.outputs.app }}"
-          ENV="${{ steps.meta.outputs.env }}"
-          SRC_FILE="${{ steps.meta.outputs.file }}"
-          BRANCH="${{ steps.push_iam.outputs.branch }}"
-
-          TITLE="Auth0 App Request: ${ORG} / ${APP} / ${ENV}"
-          BODY="Automated Auth0 app registration request.\n\nSource repo: ${GITHUB_REPOSITORY}\nCommit: ${GITHUB_SHA}\nApp file in apps repo: ${SRC_FILE}\nBranch in IAM repo: ${BRANCH}"
-
-          # Build JSON for PR creation
-          json=$(jq -n \
-            --arg title "$TITLE" \
-            --arg head "$BRANCH" \
-            --arg base "master" \
-            --arg body "$BODY" \
-            '{title:$title, head:$head, base:$base, body:$body}')
-
-          curl -sS -X POST \
-            -H "Authorization: Bearer ${IAM_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/rajiastate/auth0-apps/pulls \
-            -d "$json"
+          Write-Host "Dispatched request to $uri"
