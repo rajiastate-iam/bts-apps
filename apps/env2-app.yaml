@@ -1,0 +1,28 @@
+orgname: ENV
+servicenow_req: REQ0012345
+
+app: ENV-api
+env: dev
+
+displayname: "ENV APP (Dev)"
+apptype: regular_web
+
+granttypes:
+  - authorization_code
+  - refresh_token
+
+callbacks:
+  - https://ENVa-dev.example.com/callback
+
+logouturls:
+  - https://ENV-dev.example.com/logout
+
+allowedorigins:
+  - https://ENV-dev.example.com
+
+clientmetadata:
+  system: ENV
+  owner_team: ENV-platform
+  environment: dev
+
+jwtlifetimeinseconds: 3600
