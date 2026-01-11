@@ -1,4 +1,4 @@
-name: Publish Auth0 App to IAM (GitHub App, No PAT)
+name: Publish Auth0 App to IAM (workflow_call, no secrets)
 
 on:
   push:
@@ -10,10 +10,17 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
-  publish:
+  detect-and-upload:
     runs-on: ubuntu-latest
+    outputs:
+      org: ${{ steps.meta.outputs.org }}
+      app: ${{ steps.meta.outputs.app }}
+      env: ${{ steps.meta.outputs.env }}
+      file: ${{ steps.changed.outputs.file }}
+      artifact_name: ${{ steps.art.outputs.name }}
 
     steps:
       - name: Checkout app repo
@@ -27,45 +34,23 @@ jobs:
         run: |
           $before = "${{ github.event.before }}"
           $after  = "${{ github.sha }}"
-
           Write-Host "Diffing $before..$after"
+
           $changed = @(git diff --name-only $before $after)
-
-          Write-Host "All changed files:"
-          $changed | ForEach-Object { Write-Host " - $_" }
-
           $files = @($changed | Where-Object { $_ -match '^apps/.*\.ya?ml$' })
 
-          Write-Host "App YAML files changed:"
-          $files | ForEach-Object { Write-Host " * $_" }
-
-          if ($files.Count -eq 0) {
-            Write-Host "No apps/*.yml|yaml changed."
-            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            exit 0
-          }
-
-          if ($files.Count -ne 1) {
-            throw "Expected exactly 1 apps/*.yml|yaml file change, found $($files.Count)."
-          }
+          if ($files.Count -eq 0) { throw "No apps/*.yml|yaml changed." }
+          if ($files.Count -ne 1) { throw "Expected exactly 1 apps/*.yml|yaml file change, found $($files.Count)." }
 
           $file = $files[0].Trim()
           Write-Host "Using file: $file"
-
           "file=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Read metadata from changed app file
-        if: steps.changed.outputs.skip != 'true'
         id: meta
         shell: pwsh
         run: |
           $file = "${{ steps.changed.outputs.file }}"
-          Write-Host "Reading metadata from $file"
-
-          if (-not (Test-Path $file)) {
-            throw "File not found: $file"
-          }
 
           if (-not (Get-Command ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
             Install-Module powershell-yaml -Scope CurrentUser -Force
@@ -83,51 +68,31 @@ jobs:
           "app=$($obj.app)"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "env=$($obj.env)"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-          Write-Host "Parsed metadata: org=$($obj.orgname) app=$($obj.app) env=$($obj.env)"
-
-      - name: Get GitHub App token
-        if: steps.changed.outputs.skip != 'true'
-        id: app-token
-        uses: tibdex/github-app-token@v2
-        with:
-          app_id: ${{ secrets.AUTH0_GHAPP_ID }}
-          private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
-
-      - name: Dispatch request to auth0-apps (print payload + status)
-        if: steps.changed.outputs.skip != 'true'
+      - name: Prepare artifact
+        id: art
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          $srcFile = "${{ steps.changed.outputs.file }}"   # <-- MUST be the path like apps/cog.yaml
+          New-Item -ItemType Directory -Force -Path /tmp/appreq | Out-Null
+          Copy-Item "${{ steps.changed.outputs.file }}" /tmp/appreq/app.yaml -Force
 
-          $payloadObj = @{
-            event_type = "auth0_app_request"
-            client_payload = @{
-              src_repo = "${{ github.repository }}"
-              src_sha  = "${{ github.sha }}"
-              src_file = $srcFile
-              org      = "${{ steps.meta.outputs.org }}"
-              app      = "${{ steps.meta.outputs.app }}"
-              env      = "${{ steps.meta.outputs.env }}"
-            }
-          }
+          $name = "auth0-app-yaml-${{ github.run_id }}"
+          "name=$name" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-          Write-Host "Dispatch payload:"
-          $payloadObj | ConvertTo-Json -Depth 6 | Write-Host
+      - name: Upload YAML artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.art.outputs.name }}
+          path: /tmp/appreq/app.yaml
+          if-no-files-found: error
 
-          $payload = $payloadObj | ConvertTo-Json -Depth 6
-          $uri = "https://api.github.com/repos/rajiastate/auth0-apps/dispatches"
-          Write-Host "Dispatch URL: $uri"
-
-          $resp = Invoke-WebRequest `
-            -Method POST `
-            -Uri $uri `
-            -Headers @{
-              Authorization = "Bearer $env:GH_TOKEN"
-              Accept        = "application/vnd.github+json"
-              "User-Agent"  = "github-actions"
-            } `
-            -Body $payload
-
-          Write-Host "Dispatch HTTP status: $($resp.StatusCode)"
+  call-auth0-apps:
+    needs: detect-and-upload
+    uses: rajiastate/auth0-apps/.github/workflows/reusable-receive-app.yml@master
+    with:
+      org: ${{ needs.detect-and-upload.outputs.org }}
+      app: ${{ needs.detect-and-upload.outputs.app }}
+      env: ${{ needs.detect-and-upload.outputs.env }}
+      src_repo: ${{ github.repository }}
+      src_sha: ${{ github.sha }}
+      src_file: ${{ needs.detect-and-upload.outputs.file }}
+      artifact_name: ${{ needs.detect-and-upload.outputs.artifact_name }}
