@@ -1,0 +1,28 @@
+orgname: app1
+servicenow_req: REQ0012345
+
+app: app1-api
+env: dev
+
+displayname: "app1 APP (Dev)"
+apptype: regular_web
+
+granttypes:
+  - authorization_code
+  - refresh_token
+
+callbacks:
+  - https://app1-dev.example.com/callback
+
+logouturls:
+  - https://app1-dev.example.com/logout
+
+allowedorigins:
+  - https://app1-dev.example.com
+
+clientmetadata:
+  system: app1
+  owner_team: app1-platform
+  environment: dev
+
+jwtlifetimeinseconds: 3600
