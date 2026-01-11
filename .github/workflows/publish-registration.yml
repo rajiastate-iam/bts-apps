@@ -87,7 +87,7 @@ jobs:
 
   call-auth0-apps:
     needs: detect-and-upload
-    uses: rajiastate/auth0-apps/.github/workflows/reusable-receive-app.yml@master
+    uses: rajiastate-iam/auth0-apps/.github/workflows/reusable-receive-app.yml@master
     with:
       org: ${{ needs.detect-and-upload.outputs.org }}
       app: ${{ needs.detect-and-upload.outputs.app }}
