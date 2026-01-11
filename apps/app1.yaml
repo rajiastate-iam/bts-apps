@@ -1,10 +1,10 @@
-orgname: vum
+orgname: app1
 servicenow_req: REQ0012345
 
-app: vum-api
+app: app1-api
 env: dev
 
-displayname: "vum APP (Dev)"
+displayname: "app1 APP (Dev)"
 apptype: regular_web
 
 granttypes:
@@ -12,17 +12,17 @@ granttypes:
   - refresh_token
 
 callbacks:
-  - https://vum-dev.example.com/callback
+  - https://app1-dev.example.com/callback
 
 logouturls:
-  - https://vum-dev.example.com/logout
+  - https://app1-dev.example.com/logout
 
 allowedorigins:
-  - https://vum-dev.example.com
+  - https://app1-dev.example.com
 
 clientmetadata:
-  system: vum
-  owner_team: vum-platform
+  system: app1
+  owner_team: app1-platform
   environment: dev
 
 jwtlifetimeinseconds: 3600
