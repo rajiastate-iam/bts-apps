@@ -1,98 +1,149 @@
-name: Publish Auth0 App to IAM (workflow_call, no secrets)
+name: Reusable - Receive Auth0 App (Create PR)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "apps/*.yaml"
-      - "apps/*.yml"
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      org:
+        required: true
+        type: string
+      app:
+        required: true
+        type: string
+      env:
+        required: true
+        type: string
+      yaml_path:
+        required: true
+        type: string
+      src_repo:
+        required: true
+        type: string
+      src_sha:
+        required: true
+        type: string
 
 permissions:
-  contents: read
-  actions: write
+  contents: write
+  pull-requests: write
 
 jobs:
-  detect-and-upload:
+  create-pr:
     runs-on: ubuntu-latest
-    outputs:
-      org: ${{ steps.meta.outputs.org }}
-      app: ${{ steps.meta.outputs.app }}
-      env: ${{ steps.meta.outputs.env }}
-      file: ${{ steps.changed.outputs.file }}
-      artifact_name: ${{ steps.art.outputs.name }}
 
     steps:
-      - name: Checkout app repo
+      - name: Checkout auth0-apps (this repo)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Detect changed app file
-        id: changed
-        shell: pwsh
-        run: |
-          $before = "${{ github.event.before }}"
-          $after  = "${{ github.sha }}"
-          Write-Host "Diffing $before..$after"
-
-          $changed = @(git diff --name-only $before $after)
-          $files = @($changed | Where-Object { $_ -match '^apps/.*\.ya?ml$' })
-
-          if ($files.Count -eq 0) { throw "No apps/*.yml|yaml changed." }
-          if ($files.Count -ne 1) { throw "Expected exactly 1 apps/*.yml|yaml file change, found $($files.Count)." }
-
-          $file = $files[0].Trim()
-          Write-Host "Using file: $file"
-          "file=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Read metadata from changed app file
-        id: meta
-        shell: pwsh
-        run: |
-          $file = "${{ steps.changed.outputs.file }}"
-
-          if (-not (Get-Command ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
-            Install-Module powershell-yaml -Scope CurrentUser -Force
-            Import-Module powershell-yaml
-          }
-
-          $yaml = Get-Content $file -Raw
-          $obj  = $yaml | ConvertFrom-Yaml
-
-          if (-not $obj.orgname -or -not $obj.app -or -not $obj.env) {
-            throw "Missing orgname/app/env in $file"
-          }
-
-          "org=$($obj.orgname)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "app=$($obj.app)"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "env=$($obj.env)"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Prepare artifact
-        id: art
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path /tmp/appreq | Out-Null
-          Copy-Item "${{ steps.changed.outputs.file }}" /tmp/appreq/app.yaml -Force
-
-          $name = "auth0-app-yaml-${{ github.run_id }}"
-          "name=$name" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Upload YAML artifact
-        uses: actions/upload-artifact@v4
+      # Checkout caller repo at the exact commit.
+      # NOTE: this uses GITHUB_TOKEN to read org-private repos.
+      - name: Checkout source repo at commit
+        uses: actions/checkout@v4
         with:
-          name: ${{ steps.art.outputs.name }}
-          path: /tmp/appreq/app.yaml
-          if-no-files-found: error
+          repository: ${{ inputs.src_repo }}
+          ref: ${{ inputs.src_sha }}
+          path: src
+          fetch-depth: 1
 
-  call-auth0-apps:
-    needs: detect-and-upload
-    uses: rajiastate-iam/auth0-apps/.github/workflows/reusable-receive-app.yml@master
-    with:
-      org: ${{ needs.detect-and-upload.outputs.org }}
-      app: ${{ needs.detect-and-upload.outputs.app }}
-      env: ${{ needs.detect-and-upload.outputs.env }}
-      src_repo: ${{ github.repository }}
-      src_sha: ${{ github.sha }}
-      src_file: ${{ needs.detect-and-upload.outputs.file }}
-      artifact_name: ${{ needs.detect-and-upload.outputs.artifact_name }}
+      - name: Validate inputs & paths
+        shell: pwsh
+        run: |
+          $org     = "${{ inputs.org }}"
+          $app     = "${{ inputs.app }}"
+          $envName = "${{ inputs.env }}"
+          $yamlRel = "${{ inputs.yaml_path }}"
+          $srcRepo = "${{ inputs.src_repo }}"
+          $srcSha  = "${{ inputs.src_sha }}"
+
+          if ($org -match '[\/\\]') { throw "Invalid org value (no slashes): $org" }
+          if ($app -match '[\/\\]') { throw "Invalid app value (no slashes): $app" }
+          if ($envName -notin @('dev','test','prod','DEV','TEST','PROD')) { throw "env must be dev/test/prod. Got: $envName" }
+
+          if ($yamlRel -notmatch '^apps\/.*\.ya?ml$') { throw "yaml_path must be under apps/*.yml|yaml. Got: $yamlRel" }
+          if ($srcRepo -notmatch '^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$') { throw "src_repo invalid: $srcRepo" }
+          if ($srcSha -notmatch '^[0-9a-f]{7,40}$') { throw "src_sha invalid: $srcSha" }
+
+          $full = Join-Path "src" $yamlRel
+          if (-not (Test-Path $full)) { throw "YAML not found in source checkout: $full" }
+
+          Write-Host "Validated. Source file exists: $full"
+
+      - name: Copy YAML into auth0-apps layout
+        id: prep
+        shell: pwsh
+        run: |
+          $org     = "${{ inputs.org }}"
+          $app     = "${{ inputs.app }}"
+          $envName = "${{ inputs.env }}".ToLower()
+          $yamlRel = "${{ inputs.yaml_path }}"
+
+          $sourceFile = Join-Path "src" $yamlRel
+          $targetDir  = Join-Path "apps" $org
+          $targetFile = Join-Path $targetDir ("{0}-{1}.yaml" -f $app, $envName)
+
+          New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+          Copy-Item $sourceFile $targetFile -Force
+
+          "target=$targetFile" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          Write-Host "Copied:"
+          Write-Host "  From: $sourceFile"
+          Write-Host "  To:   $targetFile"
+
+      - name: Commit and push branch
+        id: commit
+        shell: pwsh
+        run: |
+          $org     = "${{ inputs.org }}"
+          $app     = "${{ inputs.app }}"
+          $envName = "${{ inputs.env }}".ToLower()
+          $runId   = "${{ github.run_id }}"
+          $branch  = "auto/$org-$app-$envName-$runId"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b $branch
+          git add "${{ steps.prep.outputs.target }}"
+          git commit -m "Auth0 app request: $org / $app / $envName"
+          git push origin $branch
+
+          "branch=$branch" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Open PR
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $org     = "${{ inputs.org }}"
+          $app     = "${{ inputs.app }}"
+          $envName = "${{ inputs.env }}".ToLower()
+
+          $title = "Auth0 App Request: $org / $app / $envName"
+          $body  = @"
+Automated Auth0 app registration request.
+
+Source repo: ${{ inputs.src_repo }}
+Commit:      ${{ inputs.src_sha }}
+Source file: ${{ inputs.yaml_path }}
+
+Target file: ${{ steps.prep.outputs.target }}
+"@
+
+          $payload = @{
+            title = $title
+            head  = "${{ steps.commit.outputs.branch }}"
+            base  = "master"
+            body  = $body
+          } | ConvertTo-Json -Depth 6
+
+          Invoke-RestMethod `
+            -Method POST `
+            -Uri "https://api.github.com/repos/${{ github.repository }}/pulls" `
+            -Headers @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept        = "application/vnd.github+json"
+              "User-Agent"  = "github-actions"
+            } `
+            -Body $payload
