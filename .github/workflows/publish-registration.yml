@@ -24,7 +24,6 @@ jobs:
       files_json: ${{ steps.pick.outputs.files_json }}
       src_repo: ${{ github.repository }}
       src_sha: ${{ github.sha }}
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,20 +60,41 @@ jobs:
           Write-Host "files_json=$json"
           "files_json=$json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-  call-auth0-apps:
+  dispatch:
     needs: detect
+    runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
         yaml_path: ${{ fromJson(needs.detect.outputs.files_json) }}
 
-    permissions:
-      contents: read
+    steps:
+      - name: Dispatch request to auth0-apps
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.AUTH0_DISPATCH_TOKEN }}
+        run: |
+          $targetRepo = "rajiastate-iam/auth0-apps"
+          $uri = "https://api.github.com/repos/$targetRepo/dispatches"
 
-    uses: rajiastate-iam/auth0-apps/.github/workflows/reusable-receive-app.yml@master
+          $payload = @{
+            event_type = "auth0_app_request"
+            client_payload = @{
+              src_repo  = "${{ needs.detect.outputs.src_repo }}"
+              src_sha   = "${{ needs.detect.outputs.src_sha }}"
+              yaml_path = "${{ matrix.yaml_path }}"
+            }
+          } | ConvertTo-Json -Depth 10
 
-    with:
-      src_repo:  ${{ needs.detect.outputs.src_repo }}
-      src_sha:   ${{ needs.detect.outputs.src_sha }}
-      yaml_path: ${{ matrix.yaml_path }}
+          Write-Host "Dispatching $(${{ matrix.yaml_path }}) to $targetRepo"
+
+          Invoke-RestMethod `
+            -Method POST `
+            -Uri $uri `
+            -Headers @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept        = "application/vnd.github+json"
+              "User-Agent"  = "github-actions"
+            } `
+            -Body $payload
