@@ -1,4 +1,4 @@
-name: Publish Auth0 Registration (Reusable Workflow)
+name: Publish Auth0 Registration
 
 on:
   push:
@@ -13,10 +13,9 @@ on:
         required: false
         type: string
 
-# IMPORTANT: must allow the called workflow to request write perms
+# 🔒 READ ONLY
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   detect-and-encode:
@@ -31,92 +30,25 @@ jobs:
       src_sha: ${{ github.sha }}
 
     steps:
-      - name: Checkout bts-apps
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Pick changed YAML file
-        id: pick
-        shell: pwsh
-        run: |
-          $eventName = "${{ github.event_name }}"
-          $inputFile = "${{ inputs.file }}"
-
-          if ($eventName -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($inputFile)) {
-            $file = $inputFile.Trim()
-            if ($file -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid file path: $file" }
-            if (-not (Test-Path $file)) { throw "File not found: $file" }
-            "file=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            exit 0
-          }
-
-          $before = "${{ github.event.before }}"
-          $after  = "${{ github.sha }}"
-
-          # If before is empty/zero (rare), fall back to HEAD~1
-          if ([string]::IsNullOrWhiteSpace($before) -or $before -eq "0000000000000000000000000000000000000000") {
-            $before = "$(git rev-parse HEAD~1)"
-          }
-
-          Write-Host "Diffing $before..$after"
-          $files = @(git diff --name-only $before $after | Where-Object { $_ -match '^apps\/.*\.ya?ml$' })
-
-          if ($files.Count -eq 0) { throw "No apps/*.yml|yaml file changed." }
-          if ($files.Count -ne 1) { throw "Expected exactly 1 apps/*.yml|yaml change. Found $($files.Count):`n$($files -join "`n")" }
-
-          "file=$($files[0])" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "Selected file: $($files[0])"
-
-      - name: Read metadata (orgname/app/env)
-        id: meta
-        shell: pwsh
-        run: |
-          $file = "${{ steps.pick.outputs.file }}"
-          Write-Host "Reading metadata from $file"
-
-          if (-not (Get-Command ConvertFrom-Yaml -ErrorAction SilentlyContinue)) {
-            Install-Module powershell-yaml -Scope CurrentUser -Force
-          }
-          Import-Module powershell-yaml
-
-          $obj = (Get-Content $file -Raw) | ConvertFrom-Yaml
-
-          if (-not $obj.orgname -or -not $obj.app -or -not $obj.env) {
-            throw "Missing required keys (orgname/app/env) in $file"
-          }
-
-          "org=$($obj.orgname)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "app=$($obj.app)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "env=$($obj.env)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Base64 encode YAML content
-        id: b64
-        shell: pwsh
-        run: |
-          $file = "${{ steps.pick.outputs.file }}"
-          $bytes = [System.IO.File]::ReadAllBytes($file)
-          $b64 = [Convert]::ToBase64String($bytes)
-
-          # multiline output safe
-          "yaml_b64<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          $b64            | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "EOF"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+   
 
   call-auth0-apps:
     needs: detect-and-encode
 
-    # IMPORTANT: also declare perms at the calling job
+    # 🔒 still read-only
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
 
     uses: rajiastate-iam/auth0-apps/.github/workflows/reusable-receive-app.yml@master
     with:
-      org: ${{ needs.detect-and-encode.outputs.org }}
-      app: ${{ needs.detect-and-encode.outputs.app }}
-      env: ${{ needs.detect-and-encode.outputs.env }}
+      org:       ${{ needs.detect-and-encode.outputs.org }}
+      app:       ${{ needs.detect-and-encode.outputs.app }}
+      env:       ${{ needs.detect-and-encode.outputs.env }}
       yaml_path: ${{ needs.detect-and-encode.outputs.yaml_path }}
-      src_repo: ${{ needs.detect-and-encode.outputs.src_repo }}
-      src_sha: ${{ needs.detect-and-encode.outputs.src_sha }}
-      yaml_b64: ${{ needs.detect-and-encode.outputs.yaml_b64 }}
+      yaml_b64:  ${{ needs.detect-and-encode.outputs.yaml_b64 }}
+      src_repo:  ${{ needs.detect-and-encode.outputs.src_repo }}
+      src_sha:   ${{ needs.detect-and-encode.outputs.src_sha }}
