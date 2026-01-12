@@ -6,6 +6,7 @@ on:
     paths:
       - "apps/*.yaml"
       - "apps/*.yml"
+
   workflow_dispatch:
     inputs:
       file:
@@ -41,57 +42,90 @@ jobs:
           $eventName = "${{ github.event_name }}"
           $inputFile = "${{ inputs.file }}"
 
+          Write-Host "Event: $eventName"
+          Write-Host "Input file: '$inputFile'"
+
           if ($eventName -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($inputFile)) {
-            if ($inputFile -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid file path" }
-            "file=$inputFile" | Out-File $env:GITHUB_OUTPUT -Append
+            $file = $inputFile.Trim()
+
+            if ($file -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid file path: $file" }
+            if (-not (Test-Path $file)) { throw "File not found: $file" }
+
+            "file=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "Selected file (dispatch): $file"
             exit 0
           }
 
           $before = "${{ github.event.before }}"
-          if (-not $before -or $before -eq "0000000000000000000000000000000000000000") {
+          $after  = "${{ github.sha }}"
+
+          if ([string]::IsNullOrWhiteSpace($before) -or $before -eq "0000000000000000000000000000000000000000") {
             $before = "$(git rev-parse HEAD~1)"
           }
 
-          $files = git diff --name-only $before "${{ github.sha }}" |
-            Where-Object { $_ -match '^apps\/.*\.ya?ml$' }
+          Write-Host "Diffing $before..$after"
+          $files = @(git diff --name-only $before $after | Where-Object { $_ -match '^apps\/.*\.ya?ml$' })
 
-          if ($files.Count -ne 1) {
-            throw "Expected exactly one apps/*.yaml change"
-          }
+          if ($files.Count -eq 0) { throw "No apps/*.yml|yaml file changed." }
+          if ($files.Count -ne 1) { throw "Expected exactly 1 apps/*.yml|yaml change. Found $($files.Count):`n$($files -join "`n")" }
 
-          "file=$($files[0])" | Out-File $env:GITHUB_OUTPUT -Append
+          $file = $files[0].Trim()
+          Write-Host "Selected file (diff): $file"
+
+          "file=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Read metadata
         id: meta
         shell: pwsh
         run: |
+          $file = "${{ steps.pick.outputs.file }}"
+          Write-Host "Picked file: '$file'"
+
+          if ([string]::IsNullOrWhiteSpace($file)) {
+            throw "steps.pick.outputs.file is empty. Pick step did not set output 'file'."
+          }
+
+          if (-not (Test-Path $file)) {
+            Write-Host "Workspace files under apps/:"
+            if (Test-Path "apps") {
+              Get-ChildItem -Recurse -File apps | ForEach-Object { Write-Host $_.FullName }
+            } else {
+              Write-Host "No 'apps' folder found in workspace."
+            }
+            throw "File not found in workspace: $file"
+          }
+
           Install-Module powershell-yaml -Scope CurrentUser -Force
           Import-Module powershell-yaml
 
-          $obj = (Get-Content "${{ steps.pick.outputs.file }}" -Raw) | ConvertFrom-Yaml
+          $obj = (Get-Content $file -Raw) | ConvertFrom-Yaml
 
-          foreach ($k in 'orgname','app','env') {
-            if (-not $obj.$k) { throw "Missing $k" }
+          foreach ($k in @('orgname','app','env')) {
+            if (-not $obj.$k) { throw "Missing required key '$k' in $file" }
           }
 
-          if ($obj.env -notin @('DEV','TEST','PROD')) {
-            throw "env must be DEV|TEST|PROD"
+          $envv = [string]$obj.env
+          if ($envv -notin @('DEV','TEST','PROD')) {
+            throw "env must be DEV|TEST|PROD. Found '$envv' in $file"
           }
 
-          "org=$($obj.orgname)" | Out-File $env:GITHUB_OUTPUT -Append
-          "app=$($obj.app)"     | Out-File $env:GITHUB_OUTPUT -Append
-          "env=$($obj.env)"     | Out-File $env:GITHUB_OUTPUT -Append
+          "org=$([string]$obj.orgname)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "app=$([string]$obj.app)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "env=$envv"                   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Base64 encode YAML
         id: b64
         shell: pwsh
         run: |
-          $bytes = [IO.File]::ReadAllBytes("${{ steps.pick.outputs.file }}")
+          $file = "${{ steps.pick.outputs.file }}"
+          Write-Host "Encoding file: $file"
+
+          $bytes = [System.IO.File]::ReadAllBytes($file)
           $b64 = [Convert]::ToBase64String($bytes)
 
-          "yaml_b64<<EOF" | Out-File $env:GITHUB_OUTPUT -Append
-          $b64            | Out-File $env:GITHUB_OUTPUT -Append
-          "EOF"           | Out-File $env:GITHUB_OUTPUT -Append
+          "yaml_b64<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $b64            | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "EOF"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   call-auth0-apps:
     needs: detect-and-encode
@@ -100,7 +134,7 @@ jobs:
 
     uses: rajiastate-iam/auth0-apps/.github/workflows/reusable-receive-app.yml@master
 
-    # 🔑 REQUIRED by org policy
+    # REQUIRED by org policy: explicit secrets wiring
     secrets:
       AUTH0_GHAPP_ID: ${{ secrets.AUTH0_GHAPP_ID }}
       AUTH0_GHAPP_PRIVATE_KEY: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
