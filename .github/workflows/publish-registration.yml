@@ -6,7 +6,6 @@ on:
     paths:
       - "apps/**/*.yaml"
       - "apps/**/*.yml"
-
   workflow_dispatch:
     inputs:
       file:
@@ -47,8 +46,7 @@ jobs:
             if ($f -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid file: $f" }
             if (-not (Test-Path $f)) { throw "File not found: $f" }
             $files = @($f)
-          }
-          else {
+          } else {
             $before = "${{ github.event.before }}"
             $after  = "${{ github.sha }}"
 
@@ -81,8 +79,6 @@ jobs:
     steps:
       - name: Checkout bts-apps
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Mint GitHub App token (ORG secrets)
         id: app-token
@@ -117,11 +113,11 @@ jobs:
           $bytes = [IO.File]::ReadAllBytes($file)
           $b64 = [Convert]::ToBase64String($bytes)
 
-          "org=$org"         | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "app=$app"         | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "env=$envName"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "target=$target"   | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "yaml_b64=$b64"    | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "org=$org"       | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "app=$app"       | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "env=$envName"   | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "target=$target" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "yaml_b64=$b64"  | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Checkout auth0-apps (with App token)
         uses: actions/checkout@v4
@@ -131,7 +127,21 @@ jobs:
           path: auth0-apps
           fetch-depth: 0
 
-      - name: Create branch + add file + push
+      - name: Determine auth0-apps default branch
+        id: base
+        shell: pwsh
+        working-directory: auth0-apps
+        run: |
+          $ErrorActionPreference = "Stop"
+          $line = (git remote show origin | Select-String "HEAD branch").ToString()
+          if (-not $line) { throw "Could not detect default branch from origin" }
+          $base = ($line -split "HEAD branch:\s*")[1].Trim()
+          if ([string]::IsNullOrWhiteSpace($base)) { throw "Detected empty default branch" }
+
+          Write-Host "Default branch detected: $base"
+          "base=$base" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Create branch + add file + push (only if changed)
         id: push
         shell: pwsh
         working-directory: auth0-apps
@@ -141,6 +151,7 @@ jobs:
           APP: ${{ steps.prep.outputs.app }}
           ENV_NAME: ${{ steps.prep.outputs.env }}
           TARGET: ${{ steps.prep.outputs.target }}
+          BASE: ${{ steps.base.outputs.base }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -149,29 +160,40 @@ jobs:
           $envName = $env:ENV_NAME
           $target  = $env:TARGET
           $b64     = $env:YAML_B64
-
-          if ([string]::IsNullOrWhiteSpace($b64)) { throw "YAML_B64 is empty" }
+          $base    = $env:BASE
 
           $branch = "auto/$org-$app-$envName-${{ github.run_id }}-${{ github.run_attempt }}"
+
+          git checkout $base
+          git pull origin $base
           git checkout -b $branch
 
           $bytes = [Convert]::FromBase64String($b64)
-
           $dir = Split-Path -Path $target -Parent
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-
           [IO.File]::WriteAllBytes($target, $bytes)
 
           git config user.name  "iam-auth0-bot"
           git config user.email "iam-auth0-bot@users.noreply.github.com"
 
           git add $target
+
+          # If nothing changed, do NOT try to open a PR
+          $status = (git status --porcelain)
+          if ([string]::IsNullOrWhiteSpace($status)) {
+            Write-Host "No changes detected in auth0-apps for $target. Skipping PR."
+            "changed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+
           git commit -m "Auth0 app request: $org / $app / $envName"
           git push origin $branch
 
+          "changed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "branch=$branch" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Open PR in auth0-apps
+      - name: Open PR in auth0-apps (idempotent)
+        if: steps.push.outputs.changed == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -183,6 +205,7 @@ jobs:
           SRC_SHA: ${{ needs.detect.outputs.src_sha }}
           SRC_FILE: ${{ matrix.yaml_path }}
           BRANCH: ${{ steps.push.outputs.branch }}
+          BASE: ${{ steps.base.outputs.base }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -194,10 +217,22 @@ jobs:
             "Target file: $env:TARGET"
           ) -join "`n"
 
-          # IMPORTANT: change --base to master if auth0-apps uses master
+          # If PR already exists for that head branch, print it
+          $existing = gh pr list `
+            --repo rajiastate-iam/auth0-apps `
+            --head $env:BRANCH `
+            --state open `
+            --json number,url `
+            --jq '.[0].url' 2>$null
+
+          if (-not [string]::IsNullOrWhiteSpace($existing)) {
+            Write-Host "PR already exists: $existing"
+            exit 0
+          }
+
           gh pr create `
             --repo rajiastate-iam/auth0-apps `
-            --base main `
+            --base $env:BASE `
             --head $env:BRANCH `
             --title $title `
             --body $body
