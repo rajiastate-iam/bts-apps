@@ -1,3 +1,4 @@
+
 name: Publish Auth0 Registration
 
 on:
@@ -79,6 +80,76 @@ jobs:
     steps:
       - name: Checkout bts-apps
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ---------- PRE-PR POLICY VALIDATION ----------
+      - name: Validate app policy
+        shell: pwsh
+        env:
+          YAML_PATH: ${{ matrix.yaml_path }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Install-Module powershell-yaml -Scope CurrentUser -Force
+          Import-Module powershell-yaml
+
+          $path = $env:YAML_PATH
+          $obj = (Get-Content $path -Raw) | ConvertFrom-Yaml
+
+          $errors = @()
+          $allowedConns = @("CustomersDB","azure-ad-prod")
+
+          # Required keys
+          foreach ($k in @("orgname","app","env","displayname","apptype","servicenow_req")) {
+            if (-not $obj.$k) { $errors += "$path: missing required key '$k'" }
+          }
+
+          # ServiceNow request format
+          $snow = [string]$obj.servicenow_req
+          if ($snow -and ($snow -notmatch '^REQ\d+$')) {
+            $errors += "$path: servicenow_req must match REQ<digits> (e.g., REQ0012345)"
+          }
+
+          # URL checks
+          function Check-Urls($urls,$field) {
+            foreach ($u in $urls) {
+              try {
+                $uri = [System.Uri]$u
+                if ($uri.Scheme -ne "https") {
+                  $script:errors += "$field: URL must use https -> $u"
+                }
+                $host = $uri.Host.ToLower()
+                if ($host -eq "localhost" -or $host -eq "127.0.0.1" -or $host.EndsWith(".local")) {
+                  $script:errors += "$field: localhost/127.0.0.1/.local not allowed -> $u"
+                }
+              } catch {
+                $script:errors += "$field: invalid URL -> $u"
+              }
+            }
+          }
+
+          Check-Urls $obj.callbacks "callbacks"
+          Check-Urls $obj.logouturls "logouturls"
+          Check-Urls $obj.allowedorigins "allowedorigins"
+
+          # Connections restriction
+          $conns = @($obj.connections)
+          $unknown = $conns | Where-Object { $_ -notin $allowedConns }
+          if ($unknown.Count -gt 0) {
+            $errors += "$path: unsupported connections $($unknown -join ', '). Allowed: $($allowedConns -join ', ')"
+          }
+          if ($conns.Count -eq 0) {
+            $errors += "$path: 'connections' must include at least one of $($allowedConns -join ', ')"
+          }
+
+          if ($errors.Count -gt 0) {
+            Write-Host "VALIDATION FAILED:"
+            $errors | ForEach-Object { Write-Host " - $_" }
+            exit 1
+          } else {
+            Write-Host "Validation passed ✅"
+          }
 
       - name: Mint GitHub App token (ORG secrets)
         id: app-token
@@ -178,7 +249,6 @@ jobs:
 
           git add $target
 
-          # If nothing changed, do NOT try to open a PR
           $status = (git status --porcelain)
           if ([string]::IsNullOrWhiteSpace($status)) {
             Write-Host "No changes detected in auth0-apps for $target. Skipping PR."
@@ -192,8 +262,15 @@ jobs:
           "changed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "branch=$branch" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Open PR in auth0-apps (idempotent)
-        if: steps.push.outputs.changed == 'true'
+      - name: Install GitHub CLI
+        run: |
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            sudo apt-get update
+            sudo apt-get install -y gh
+          }
+
+      - name: Open PR in auth0-apps (idempotent + retry)
+        if: steps.push.outputs.changed -eq 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -214,10 +291,11 @@ jobs:
             "Automated request from $env:SRC_REPO",
             "Commit: $env:SRC_SHA",
             "Source file: $env:SRC_FILE",
-            "Target file: $env:TARGET"
+            "Target file: $env:TARGET",
+            "",
+            "Policy checks passed: https URLs only; no localhost/.local/127.0.0.1; valid ServiceNow request; connections restricted."
           ) -join "`n"
 
-          # If PR already exists for that head branch, print it
           $existing = gh pr list `
             --repo rajiastate-iam/auth0-apps `
             --head $env:BRANCH `
@@ -230,9 +308,17 @@ jobs:
             exit 0
           }
 
-          gh pr create `
-            --repo rajiastate-iam/auth0-apps `
-            --base $env:BASE `
-            --head $env:BRANCH `
-            --title $title `
-            --body $body
+          for ($i = 0; $i -lt 3; $i++) {
+            try {
+              gh pr create `
+                --repo rajiastate-iam/auth0-apps `
+                --base $env:BASE `
+                --head $env:BRANCH `
+                --title $title `
+                --body $body
+              break
+            } catch {
+              Write-Host "PR creation failed. Attempt $($i+1) of 3."
+              Start-Sleep -Seconds 5
+            }
+          }
