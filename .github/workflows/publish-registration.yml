@@ -98,7 +98,7 @@ jobs:
 
           Write-Host "Secrets present; key header/footer OK."
 
-      - name: Check GitHub App installation exists on THIS repo (uses github.token)
+      - name: Check GitHub App installation exists on THIS repo (via gh api)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,18 +106,16 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           $repo = $env:GITHUB_REPOSITORY
-          $uri  = "https://api.github.com/repos/$repo/installation"
+          Write-Host "Checking installation via gh for repo: $repo"
 
-          Write-Host "Checking installation: $uri"
-
-          $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers @{
-            Authorization              = "Bearer $env:GH_TOKEN"
-            Accept                     = "application/vnd.github+json"
-            "X-GitHub-Api-Version"     = "2022-11-28"
-            "User-Agent"               = "github-actions"
+          # If installed, this returns JSON with id/app_id. If not, gh exits non-zero.
+          $out = gh api "repos/$repo/installation" 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host $out
+            throw "Installation lookup failed via gh api."
           }
 
-          Write-Host "✅ Installation exists. app_id=$($resp.app_id) installation_id=$($resp.id)"
+          Write-Host $out
 
       - name: Mint GitHub App token via tibdex (ORG secrets)
         id: app-token
@@ -126,7 +124,7 @@ jobs:
           app_id: ${{ secrets.AUTH0_GHAPP_ID }}
           private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
 
-      - name: Dispatch request to auth0-apps
+      - name: Dispatch request to auth0-apps (via gh api)
         shell: pwsh
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -147,9 +145,7 @@ jobs:
 
           Write-Host "Dispatching $yamlPath from $srcRepo@$srcSha to $targetRepo"
 
-          $uri = "https://api.github.com/repos/$targetRepo/dispatches"
-
-          $payload = @{
+          $body = @{
             event_type = "auth0_app_request"
             client_payload = @{
               src_repo  = $srcRepo
@@ -158,13 +154,12 @@ jobs:
             }
           } | ConvertTo-Json -Depth 10
 
-          Invoke-RestMethod `
-            -Method POST `
-            -Uri $uri `
-            -Headers @{
-              Authorization          = "token $env:GH_TOKEN"
-              Accept                 = "application/vnd.github+json"
-              "X-GitHub-Api-Version" = "2022-11-28"
-              "User-Agent"           = "github-actions"
-            } `
-            -Body $payload
+          # gh api expects JSON string
+          $out = gh api "repos/$targetRepo/dispatches" -X POST -H "Accept: application/vnd.github+json" -f "event_type=auth0_app_request" -f "client_payload[src_repo]=$srcRepo" -f "client_payload[src_sha]=$srcSha" -f "client_payload[yaml_path]=$yamlPath" 2>&1
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host $out
+            throw "Dispatch failed via gh api."
+          }
+
+          Write-Host "✅ Dispatch sent."
