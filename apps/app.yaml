@@ -1,5 +1,5 @@
 orgname: CWG
-servicenow_req: REQ0012345
+servicenow_req: REQ0a012345
 
 app: billing-api
 env: dev
