@@ -4,7 +4,7 @@ servicenow_req: REQ0012345
 app: billing-api
 env: dev
 
-displayname: "Billing APP2 (Dev)"
+displayname: "CWG APP"
 apptype: regular_web
 
 granttypes:
@@ -12,17 +12,17 @@ granttypes:
   - refresh_token
 
 callbacks:
-  - https://billing-dev.example.com/callback
+  - https://cwg.example.com/callback
 
 logouturls:
-  - https://billing-dev.example.com/logout
+  - https://cwg.example.com/logout
 
 allowedorigins:
-  - https://billing-dev.example.com
+  - https://cwg.example.com
 
 clientmetadata:
-  system: billing
-  owner_team: billing-platform
+  system: cwg
+  owner_team: cwg-platform
   environment: dev
 
 jwtlifetimeinseconds: 3600
