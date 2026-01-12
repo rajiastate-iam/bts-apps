@@ -24,6 +24,7 @@ jobs:
       files_json: ${{ steps.pick.outputs.files_json }}
       src_repo: ${{ github.repository }}
       src_sha: ${{ github.sha }}
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,10 +46,14 @@ jobs:
           } else {
             $before = "${{ github.event.before }}"
             $after  = "${{ github.sha }}"
+
             if ([string]::IsNullOrWhiteSpace($before) -or $before -eq "0000000000000000000000000000000000000000") {
               $before = "$(git rev-parse HEAD~1)"
             }
-            $files = @(git diff --name-only $before $after | Where-Object { $_ -match '^apps\/.*\.ya?ml$' } | ForEach-Object { $_.Trim() })
+
+            $files = @(git diff --name-only $before $after |
+              Where-Object { $_ -match '^apps\/.*\.ya?ml$' } |
+              ForEach-Object { $_.Trim() })
           }
 
           if ($files.Count -eq 0) { throw "No apps YAML files changed." }
@@ -74,20 +79,28 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.AUTH0_DISPATCH_TOKEN }}
+          TARGET_REPO: rajiastate-iam/auth0-apps
         run: |
-          $targetRepo = "rajiastate-iam/auth0-apps"
+          $targetRepo = $env:TARGET_REPO
+          $yamlPath   = "${{ matrix.yaml_path }}"
+          $srcRepo    = "${{ needs.detect.outputs.src_repo }}"
+          $srcSha     = "${{ needs.detect.outputs.src_sha }}"
+
+          Write-Host "Dispatching file '$yamlPath' to $targetRepo"
+          Write-Host "Source: $srcRepo @ $srcSha"
+
           $uri = "https://api.github.com/repos/$targetRepo/dispatches"
 
-          $payload = @{
+          $payloadObj = @{
             event_type = "auth0_app_request"
             client_payload = @{
-              src_repo  = "${{ needs.detect.outputs.src_repo }}"
-              src_sha   = "${{ needs.detect.outputs.src_sha }}"
-              yaml_path = "${{ matrix.yaml_path }}"
+              src_repo  = $srcRepo
+              src_sha   = $srcSha
+              yaml_path = $yamlPath
             }
-          } | ConvertTo-Json -Depth 10
+          }
 
-          Write-Host "Dispatching $(${{ matrix.yaml_path }}) to $targetRepo"
+          $payload = $payloadObj | ConvertTo-Json -Depth 10
 
           Invoke-RestMethod `
             -Method POST `
