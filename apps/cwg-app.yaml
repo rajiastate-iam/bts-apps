@@ -13,13 +13,13 @@ granttypes:
   - refresh_token
 
 callbacks:
-  - https://cwg1111.example.com/callback
+  - "https://cwg1111.example.com/callback"
 
 logouturls:
-  - https://cwg1111.example.com/logout
+  - "https://cwg1111.example.com/logout"
 
 allowedorigins:
-  - https://cwg1111.example.com
+  - "https://cwg1111.example.com"
 
 clientmetadata:
   system: cwg
