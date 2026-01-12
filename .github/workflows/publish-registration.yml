@@ -86,11 +86,17 @@ jobs:
         yaml_path: ${{ fromJson(needs.detect.outputs.files_json) }}
 
     steps:
+      - name: Mint GitHub App token (from ORG secrets)
+        id: app-token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.AUTH0_GHAPP_ID }}
+          private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
+
       - name: Dispatch request to auth0-apps
         shell: pwsh
         env:
-          # ORG SECRET (must be granted to this repo)
-          GH_TOKEN: ${{ secrets.AUTH0_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TARGET_REPO: rajiastate-iam/auth0-apps
         run: |
           $targetRepo = $env:TARGET_REPO
@@ -99,7 +105,7 @@ jobs:
           $srcSha     = "${{ needs.detect.outputs.src_sha }}"
 
           if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-            throw "Missing secrets.AUTH0_DISPATCH_TOKEN (org secret not available to this repo?)"
+            throw "GitHub App token is empty. Check app install + secrets."
           }
 
           Write-Host "Dispatching file '$yamlPath' to $targetRepo"
@@ -107,16 +113,14 @@ jobs:
 
           $uri = "https://api.github.com/repos/$targetRepo/dispatches"
 
-          $payloadObj = @{
+          $payload = @{
             event_type = "auth0_app_request"
             client_payload = @{
               src_repo  = $srcRepo
               src_sha   = $srcSha
               yaml_path = $yamlPath
             }
-          }
-
-          $payload = $payloadObj | ConvertTo-Json -Depth 10
+          } | ConvertTo-Json -Depth 10
 
           Invoke-RestMethod `
             -Method POST `
