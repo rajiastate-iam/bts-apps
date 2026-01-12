@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       file:
-        description: "Optional: apps/<file>.yaml"
+        description: "Optional: single path like apps/<file>.yaml"
         required: false
         type: string
 
@@ -24,13 +24,14 @@ jobs:
       org: ${{ steps.meta.outputs.org }}
       app: ${{ steps.meta.outputs.app }}
       env: ${{ steps.meta.outputs.env }}
-      yaml_b64: ${{ steps.encode.outputs.yaml_b64 }}
       yaml_path: ${{ steps.pick.outputs.file }}
+      yaml_b64: ${{ steps.b64.outputs.yaml_b64 }}
       src_repo: ${{ github.repository }}
       src_sha: ${{ github.sha }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -40,40 +41,65 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.file }}") {
-            $file = "${{ inputs.file }}"
-          } else {
-            $before = "${{ github.event.before }}"
-            if (-not $before -or $before -eq "0000000000000000000000000000000000000000") {
-              $before = "$(git rev-parse HEAD~1)"
-            }
-            $file = git diff --name-only $before ${{ github.sha }} |
-              Where-Object { $_ -match '^apps/.*\.ya?ml$' } |
-              Select-Object -First 1
+          $eventName = "${{ github.event_name }}"
+          $inputFile = "${{ inputs.file }}"
+
+          if ($eventName -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($inputFile)) {
+            $file = $inputFile.Trim()
+            if ($file -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid file path: $file" }
+            if (-not (Test-Path $file)) { throw "File not found: $file" }
+            "file=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
           }
 
-          if (-not $file) { throw "No apps YAML file found." }
+          $before = "${{ github.event.before }}"
+          $after  = "${{ github.sha }}"
 
-          "file=$file" >> $env:GITHUB_OUTPUT
+          if ([string]::IsNullOrWhiteSpace($before) -or $before -eq "0000000000000000000000000000000000000000") {
+            $before = "$(git rev-parse HEAD~1)"
+          }
 
-      - name: Read metadata
+          $files = @(git diff --name-only $before $after |
+            Where-Object { $_ -match '^apps\/.*\.ya?ml$' } |
+            ForEach-Object { $_.Trim() } |
+            Sort-Object -Unique)
+
+          if ($files.Count -eq 0) { throw "No apps YAML file changed." }
+          if ($files.Count -ne 1) {
+            throw "Expected exactly 1 apps YAML change, found $($files.Count):`n$($files -join "`n")"
+          }
+
+          "file=$($files[0])" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Read metadata (orgname/app/env)
         id: meta
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $file = "${{ steps.pick.outputs.file }}"
+
           Install-Module powershell-yaml -Scope CurrentUser -Force
-          $obj = Get-Content "${{ steps.pick.outputs.file }}" -Raw | ConvertFrom-Yaml
+          Import-Module powershell-yaml
 
-          "org=$($obj.orgname)" >> $env:GITHUB_OUTPUT
-          "app=$($obj.app)" >> $env:GITHUB_OUTPUT
-          "env=$($obj.env)" >> $env:GITHUB_OUTPUT
+          $obj = (Get-Content $file -Raw) | ConvertFrom-Yaml
 
-      - name: Base64 encode YAML
-        id: encode
+          if (-not $obj.orgname) { throw "Missing orgname in $file" }
+          if (-not $obj.app)     { throw "Missing app in $file" }
+          if (-not $obj.env)     { throw "Missing env in $file" }
+
+          "org=$($obj.orgname)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "app=$($obj.app)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "env=$($obj.env)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Base64 encode YAML content
+        id: b64
         shell: pwsh
         run: |
-          $bytes = [IO.File]::ReadAllBytes("${{ steps.pick.outputs.file }}")
+          $ErrorActionPreference = "Stop"
+          $file = "${{ steps.pick.outputs.file }}"
+          $bytes = [System.IO.File]::ReadAllBytes($file)
           $b64 = [Convert]::ToBase64String($bytes)
-          "yaml_b64=$b64" >> $env:GITHUB_OUTPUT
+          "yaml_b64=$b64" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   call-auth0:
     needs: prepare
