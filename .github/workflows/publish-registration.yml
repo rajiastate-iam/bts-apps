@@ -72,10 +72,8 @@ jobs:
           Write-Host "Selected YAML files:"
           $files | ForEach-Object { Write-Host " - $_" }
 
-          # Build JSON array safely
           $json = "[" + (($files | ForEach-Object { '"' + ($_ -replace '"','\"') + '"' }) -join ",") + "]"
           Write-Host "files_json=$json"
-
           "files_json=$json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   dispatch:
@@ -88,14 +86,14 @@ jobs:
         yaml_path: ${{ fromJson(needs.detect.outputs.files_json) }}
 
     steps:
-      - name: Mint GitHub App token (ORG secrets)
+      - name: Mint GitHub App token (ORG secrets) for auth0-apps installation
         id: app-token
         uses: tibdex/github-app-token@v2
         with:
           app_id: ${{ secrets.AUTH0_GHAPP_ID }}
           private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
-          owner: rajiastate-iam
-          repositories: auth0-apps
+          installation_retrieval_mode: repository
+          installation_retrieval_payload: '{"repository":"rajiastate-iam/auth0-apps"}'
 
       - name: Dispatch request to auth0-apps
         shell: pwsh
