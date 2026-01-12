@@ -122,8 +122,8 @@ jobs:
               if ($uriObj.Scheme -ne 'https') {
                 $script:errors += "$($field): URL must use https -> $u"
               }
-              $host = ($uriObj.Host ?? '').ToLowerInvariant()
-              if ($host -eq 'localhost' -or $host -eq '127.0.0.1' -or $host.EndsWith('.local')) {
+              $uriHost = ($uriObj.Host ?? '').ToLowerInvariant()
+              if ($uriHost -eq 'localhost' -or $uriHost -eq '127.0.0.1' -or $uriHost.EndsWith('.local')) {
                 $script:errors += "$($field): localhost/127.0.0.1/.local not allowed -> $u"
               }
             }
@@ -260,8 +260,8 @@ jobs:
           git commit -m "Auth0 app request: $org / $app / $envName"
           git push origin $branch
 
-          "changed=true"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "branch=$branch"| Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "changed=true"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "branch=$branch" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Install GitHub CLI
         shell: pwsh
