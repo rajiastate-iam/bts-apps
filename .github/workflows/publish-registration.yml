@@ -1,69 +1,319 @@
 
-- name: Validate app policy
-  shell: pwsh
-  env:
-    YAML_PATH: ${{ matrix.yaml_path }}
-  run: |
-    $ErrorActionPreference = "Stop"
+name: Publish Auth0 Registration
 
-    # Avoid interactive prompts on fresh runners
-    try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch {}
-    Install-Module powershell-yaml -Scope CurrentUser -Force
-    Import-Module powershell-yaml
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**/*.yaml"
+      - "apps/**/*.yml"
+  workflow_dispatch:
+    inputs:
+      file:
+        description: "Optional: single file path like apps/<file>.yaml"
+        required: false
+        type: string
 
-    $path = $env:YAML_PATH
-    $obj = (Get-Content $path -Raw) | ConvertFrom-Yaml
+permissions:
+  contents: read
 
-    $errors = @()
-    $allowedConns = @("CustomersDB","azure-ad-prod")
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      files_json: ${{ steps.pick.outputs.files_json }}
+      src_repo: ${{ github.repository }}
+      src_sha: ${{ github.sha }}
+    steps:
+      - name: Checkout bts-apps
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    # Required keys
-    foreach ($k in @("orgname","app","env","displayname","apptype","servicenow_req")) {
-      if (-not $obj.$k) { $errors += "$($path): missing required key '$k'" }
-    }
+      - name: Pick changed YAML files
+        id: pick
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
 
-    # ServiceNow request format
-    $snow = [string]$obj.servicenow_req
-    if ($snow -and ($snow -notmatch '^REQ\d+$')) {
-      $errors += "$($path): servicenow_req must match REQ<digits> (e.g., REQ0012345)"
-    }
+          $event = "${{ github.event_name }}"
+          $inputFile = "${{ inputs.file }}"
 
-    # URL checks
-    function Check-Urls($urls,$field) {
-      foreach ($u in ($urls ?? @())) {
-        try {
-          $uri = [System.Uri]$u
-          if ($uri.Scheme -ne "https") {
-            $script:errors += "$($field): URL must use https -> $u"
+          $files = @()
+
+          if ($event -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($inputFile)) {
+            $f = $inputFile.Trim()
+            if ($f -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid file: $f" }
+            if (-not (Test-Path $f)) { throw "File not found: $f" }
+            $files = @($f)
+          } else {
+            $before = "${{ github.event.before }}"
+            $after  = "${{ github.sha }}"
+
+            if ([string]::IsNullOrWhiteSpace($before) -or $before -eq "0000000000000000000000000000000000000000") {
+              $before = "$(git rev-parse HEAD~1)"
+            }
+
+            $files = @(git diff --name-only $before $after |
+              Where-Object { $_ -match '^apps\/.*\.ya?ml$' } |
+              ForEach-Object { $_.Trim() } |
+              Sort-Object -Unique)
           }
-          $host = ($uri.Host ?? "").ToLower()
-          if ($host -eq "localhost" -or $host -eq "127.0.0.1" -or $host.EndsWith(".local")) {
-            $script:errors += "$($field): localhost/127.0.0.1/.local not allowed -> $u"
+
+          if ($files.Count -eq 0) { throw "No apps YAML changes found." }
+
+          Write-Host "Changed YAML files:"
+          $files | ForEach-Object { Write-Host " - $_" }
+
+          $json = "[" + (($files | ForEach-Object { '"' + ($_ -replace '"','\"') + '"' }) -join ",") + "]"
+          "files_json=$json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  pr:
+    needs: detect
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        yaml_path: ${{ fromJson(needs.detect.outputs.files_json) }}
+    steps:  # <-- THIS LINE IS REQUIRED
+      - name: Checkout bts-apps
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate app policy
+        shell: pwsh
+        env:
+          YAML_PATH: ${{ matrix.yaml_path }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch {}
+          Install-Module powershell-yaml -Scope CurrentUser -Force
+          Import-Module powershell-yaml
+
+          $path = $env:YAML_PATH
+          $obj = (Get-Content $path -Raw) | ConvertFrom-Yaml
+
+          $errors = @()
+          $allowedConns = @("CustomersDB","azure-ad-prod")
+
+          foreach ($k in @("orgname","app","env","displayname","apptype","servicenow_req")) {
+            if (-not $obj.$k) { $errors += "$($path): missing required key '$k'" }
           }
-        } catch {
-          $script:errors += "$($field): invalid URL -> $u"
-        }
-      }
-    }
 
-    Check-Urls $obj.callbacks "callbacks"
-    Check-Urls $obj.logouturls "logouturls"
-    Check-Urls $obj.allowedorigins "allowedorigins"
+          $snow = [string]$obj.servicenow_req
+          if ($snow -and ($snow -notmatch '^REQ\d+$')) {
+            $errors += "$($path): servicenow_req must match REQ<digits> (e.g., REQ0012345)"
+          }
 
-    # Connections restriction
-    $conns = @($obj.connections)
-    $unknown = $conns | Where-Object { $_ -notin $allowedConns }
-    if ($unknown.Count -gt 0) {
-      $errors += "$($path): unsupported connections $($unknown -join ', '). Allowed: $($allowedConns -join ', ')"
-    }
-    if ($conns.Count -eq 0) {
-      $errors += "$($path): 'connections' must include at least one of $($allowedConns -join ', ')"
-    }
+          function Check-Urls($urls,$field) {
+            foreach ($u in ($urls ?? @())) {
+              try {
+                $uri = [System.Uri]$u
+                if ($uri.Scheme -ne "https") {
+                  $script:errors += "$($field): URL must use https -> $u"
+                }
+                $host = ($uri.Host ?? "").ToLower()
+                if ($host -eq "localhost" -or $host -eq "127.0.0.1" -or $host.EndsWith(".local")) {
+                  $script:errors += "$($field): localhost/127.0.0.1/.local not allowed -> $u"
+                }
+              } catch {
+                $script:errors += "$($field): invalid URL -> $u"
+              }
+            }
+          }
 
-    if ($errors.Count -gt 0) {
-      Write-Host "VALIDATION FAILED:"
-      $errors | ForEach-Object { Write-Host " - $_" }
-      exit 1
-    } else {
-      Write-Host "Validation passed ✅"
-    }
+          Check-Urls $obj.callbacks "callbacks"
+          Check-Urls $obj.logouturls "logouturls"
+          Check-Urls $obj.allowedorigins "allowedorigins"
+
+          $conns = @($obj.connections)
+          $unknown = $conns | Where-Object { $_ -notin $allowedConns }
+          if ($unknown.Count -gt 0) {
+            $errors += "$($path): unsupported connections $($unknown -join ', '). Allowed: $($allowedConns -join ', ')"
+          }
+          if ($conns.Count -eq 0) {
+            $errors += "$($path): 'connections' must include at least one of $($allowedConns -join ', ')"
+          }
+
+          if ($errors.Count -gt 0) {
+            Write-Host "VALIDATION FAILED:"
+            $errors | ForEach-Object { Write-Host " - $_" }
+            exit 1
+          } else {
+            Write-Host "Validation passed ✅"
+          }
+
+      - name: Mint GitHub App token (ORG secrets)
+        id: app-token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.AUTH0_GHAPP_ID }}
+          private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
+
+      - name: Parse YAML + compute target path + base64 encode
+        id: prep
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $file = "${{ matrix.yaml_path }}"
+
+          Install-Module powershell-yaml -Scope CurrentUser -Force
+          Import-Module powershell-yaml
+
+          $obj = (Get-Content $file -Raw) | ConvertFrom-Yaml
+
+          if (-not $obj.orgname) { throw "Missing orgname in $file" }
+          if (-not $obj.app)     { throw "Missing app in $file" }
+          if (-not $obj.env)     { throw "Missing env in $file" }
+
+          $org = [string]$obj.orgname
+          $app = [string]$obj.app
+          $envName = ([string]$obj.env).ToLower()
+
+          $target = "apps/$org/$app-$envName.yaml"
+
+          $bytes = [IO.File]::ReadAllBytes($file)
+          $b64 = [Convert]::ToBase64String($bytes)
+
+          "org=$org"       | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "app=$app"       | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "env=$envName"   | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "target=$target" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "yaml_b64=$b64"  | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Checkout auth0-apps (with App token)
+        uses: actions/checkout@v4
+        with:
+          repository: rajiastate-iam/auth0-apps
+          token: ${{ steps.app-token.outputs.token }}
+          path: auth0-apps
+          fetch-depth: 0
+
+      - name: Determine auth0-apps default branch
+        id: base
+        shell: pwsh
+        working-directory: auth0-apps
+        run: |
+          $ErrorActionPreference = "Stop"
+          $line = (git remote show origin | Select-String "HEAD branch").ToString()
+          if (-not $line) { throw "Could not detect default branch from origin" }
+          $base = ($line -split "HEAD branch:\s*")[1].Trim()
+          if ([string]::IsNullOrWhiteSpace($base)) { throw "Detected empty default branch" }
+
+          Write-Host "Default branch detected: $base"
+          "base=$base" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Create branch + add file + push (only if changed)
+        id: push
+        shell: pwsh
+        working-directory: auth0-apps
+        env:
+          YAML_B64: ${{ steps.prep.outputs.yaml_b64 }}
+          ORG: ${{ steps.prep.outputs.org }}
+          APP: ${{ steps.prep.outputs.app }}
+          ENV_NAME: ${{ steps.prep.outputs.env }}
+          TARGET: ${{ steps.prep.outputs.target }}
+          BASE: ${{ steps.base.outputs.base }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $org     = $env:ORG
+          $app     = $env:APP
+          $envName = $env:ENV_NAME
+          $target  = $env:TARGET
+          $b64     = $env:YAML_B64
+          $base    = $env:BASE
+
+          $branch = "auto/$org-$app-$envName-${{ github.run_id }}-${{ github.run_attempt }}"
+
+          git checkout $base
+          git pull origin $base
+          git checkout -b $branch
+
+          $bytes = [Convert]::FromBase64String($b64)
+          $dir = Split-Path -Path $target -Parent
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          [IO.File]::WriteAllBytes($target, $bytes)
+
+          git config user.name  "iam-auth0-bot"
+          git config user.email "iam-auth0-bot@users.noreply.github.com"
+
+          git add $target
+
+          $status = (git status --porcelain)
+          if ([string]::IsNullOrWhiteSpace($status)) {
+            Write-Host "No changes detected in auth0-apps for $target. Skipping PR."
+            "changed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+
+          git commit -m "Auth0 app request: $org / $app / $envName"
+          git push origin $branch
+
+          "changed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "branch=$branch" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Install GitHub CLI
+        shell: pwsh
+        run: |
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            sudo apt-get update
+            sudo apt-get install -y gh
+          }
+
+      - name: Open PR in auth0-apps (idempotent + retry)
+        if: ${{ steps.push.outputs.changed == 'true' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ORG: ${{ steps.prep.outputs.org }}
+          APP: ${{ steps.prep.outputs.app }}
+          ENV_NAME: ${{ steps.prep.outputs.env }}
+          TARGET: ${{ steps.prep.outputs.target }}
+          SRC_REPO: ${{ needs.detect.outputs.src_repo }}
+          SRC_SHA: ${{ needs.detect.outputs.src_sha }}
+          SRC_FILE: ${{ matrix.yaml_path }}
+          BRANCH: ${{ steps.push.outputs.branch }}
+          BASE: ${{ steps.base.outputs.base }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $title = "Auth0 app request: $env:ORG / $env:APP / $env:ENV_NAME"
+          $body = @(
+            "Automated request from $env:SRC_REPO",
+            "Commit: $env:SRC_SHA",
+            "Source file: $env:SRC_FILE",
+            "Target file: $env:TARGET",
+            "",
+            "Policy checks passed: https URLs only; no localhost/.local/127.0.0.1; valid ServiceNow request; connections restricted."
+          ) -join "`n"
+
+          $existing = gh pr list `
+            --repo rajiastate-iam/auth0-apps `
+            --head $env:BRANCH `
+            --state open `
+            --json number,url `
+            --jq '.[0].url' 2>$null
+
+          if (-not [string]::IsNullOrWhiteSpace($existing)) {
+            Write-Host "PR already exists: $existing"
+            exit 0
+          }
+
+          for ($i = 0; $i -lt 3; $i++) {
+            try {
+              gh pr create `
+                --repo rajiastate-iam/auth0-apps `
+                --base $env:BASE `
+                --head $env:BRANCH `
+                --title $title `
+                --body $body
+              break
+            } catch {
+              Write-Host "PR creation failed. Attempt $($i+1) of 3."
+              Start-Sleep -Seconds 5
+            }
+          }
