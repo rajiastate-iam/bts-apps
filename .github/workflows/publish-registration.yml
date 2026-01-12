@@ -26,7 +26,8 @@ jobs:
       src_sha: ${{ github.sha }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -38,12 +39,16 @@ jobs:
           $inputFile = "${{ inputs.file }}"
           $files = @()
 
+          Write-Host "Event: $eventName"
+          Write-Host "Input file: '$inputFile'"
+
           if ($eventName -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($inputFile)) {
             $file = $inputFile.Trim()
             if ($file -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid file path: $file" }
             if (-not (Test-Path $file)) { throw "File not found: $file" }
             $files = @($file)
-          } else {
+          }
+          else {
             $before = "${{ github.event.before }}"
             $after  = "${{ github.sha }}"
 
@@ -51,6 +56,7 @@ jobs:
               $before = "$(git rev-parse HEAD~1)"
             }
 
+            Write-Host "Diffing $before..$after"
             $files = @(git diff --name-only $before $after |
               Where-Object { $_ -match '^apps\/.*\.ya?ml$' } |
               ForEach-Object { $_.Trim() })
@@ -61,8 +67,13 @@ jobs:
           $files = $files | Sort-Object -Unique
           $files = @($files)
 
+          Write-Host "Selected files:"
+          $files | ForEach-Object { Write-Host " - $_" }
+
+          # Force JSON array even for one item
           $json = "[" + (($files | ForEach-Object { '"' + ($_ -replace '"','\"') + '"' }) -join ",") + "]"
           Write-Host "files_json=$json"
+
           "files_json=$json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
   dispatch:
@@ -78,6 +89,7 @@ jobs:
       - name: Dispatch request to auth0-apps
         shell: pwsh
         env:
+          # ORG SECRET (must be granted to this repo)
           GH_TOKEN: ${{ secrets.AUTH0_DISPATCH_TOKEN }}
           TARGET_REPO: rajiastate-iam/auth0-apps
         run: |
@@ -85,6 +97,10 @@ jobs:
           $yamlPath   = "${{ matrix.yaml_path }}"
           $srcRepo    = "${{ needs.detect.outputs.src_repo }}"
           $srcSha     = "${{ needs.detect.outputs.src_sha }}"
+
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "Missing secrets.AUTH0_DISPATCH_TOKEN (org secret not available to this repo?)"
+          }
 
           Write-Host "Dispatching file '$yamlPath' to $targetRepo"
           Write-Host "Source: $srcRepo @ $srcSha"
@@ -106,7 +122,7 @@ jobs:
             -Method POST `
             -Uri $uri `
             -Headers @{
-              Authorization = "Bearer $env:GH_TOKEN"
+              Authorization = "token $env:GH_TOKEN"
               Accept        = "application/vnd.github+json"
               "User-Agent"  = "github-actions"
             } `
