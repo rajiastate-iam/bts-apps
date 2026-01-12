@@ -98,18 +98,18 @@ jobs:
 
           Write-Host "Secrets present; key header/footer OK."
 
-      - name: Check GitHub App installation exists on THIS repo (via gh api)
+      - name: Check GitHub App installation exists on THIS repo (via gh api using github.token)
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN_FOR_API: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
 
           $repo = $env:GITHUB_REPOSITORY
           Write-Host "Checking installation via gh for repo: $repo"
 
-          # If installed, this returns JSON with id/app_id. If not, gh exits non-zero.
-          $out = gh api "repos/$repo/installation" 2>&1
+          # IMPORTANT: explicitly provide token to gh (do NOT rely on GH_TOKEN env)
+          $out = gh api "repos/$repo/installation" --header "Authorization: Bearer $env:GITHUB_TOKEN_FOR_API" 2>&1
           if ($LASTEXITCODE -ne 0) {
             Write-Host $out
             throw "Installation lookup failed via gh api."
@@ -124,17 +124,15 @@ jobs:
           app_id: ${{ secrets.AUTH0_GHAPP_ID }}
           private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
 
-      - name: Dispatch request to auth0-apps (via gh api)
+      - name: Dispatch request to auth0-apps (via gh api using App token)
         shell: pwsh
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TARGET_REPO: rajiastate-iam/auth0-apps
         run: |
           $ErrorActionPreference = "Stop"
 
-          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-            throw "GitHub App token is empty."
-          }
+          $appToken = "${{ steps.app-token.outputs.token }}"
+          if ([string]::IsNullOrWhiteSpace($appToken)) { throw "GitHub App token is empty." }
 
           $yamlPath   = "${{ matrix.yaml_path }}"
           $srcRepo    = "${{ needs.detect.outputs.src_repo }}"
@@ -145,17 +143,14 @@ jobs:
 
           Write-Host "Dispatching $yamlPath from $srcRepo@$srcSha to $targetRepo"
 
-          $body = @{
-            event_type = "auth0_app_request"
-            client_payload = @{
-              src_repo  = $srcRepo
-              src_sha   = $srcSha
-              yaml_path = $yamlPath
-            }
-          } | ConvertTo-Json -Depth 10
-
-          # gh api expects JSON string
-          $out = gh api "repos/$targetRepo/dispatches" -X POST -H "Accept: application/vnd.github+json" -f "event_type=auth0_app_request" -f "client_payload[src_repo]=$srcRepo" -f "client_payload[src_sha]=$srcSha" -f "client_payload[yaml_path]=$yamlPath" 2>&1
+          $out = gh api "repos/$targetRepo/dispatches" `
+            -X POST `
+            --header "Authorization: token $appToken" `
+            --header "Accept: application/vnd.github+json" `
+            -f "event_type=auth0_app_request" `
+            -f "client_payload[src_repo]=$srcRepo" `
+            -f "client_payload[src_sha]=$srcSha" `
+            -f "client_payload[yaml_path]=$yamlPath" 2>&1
 
           if ($LASTEXITCODE -ne 0) {
             Write-Host $out
