@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       file:
-        description: "Optional: single path like apps/<file>.yaml"
+        description: "Optional: single file path like apps/<file>.yaml"
         required: false
         type: string
 
@@ -18,65 +18,86 @@ permissions:
   contents: read
 
 jobs:
-  prepare:
+  detect:
     runs-on: ubuntu-latest
     outputs:
-      org: ${{ steps.meta.outputs.org }}
-      app: ${{ steps.meta.outputs.app }}
-      env: ${{ steps.meta.outputs.env }}
-      yaml_path: ${{ steps.pick.outputs.file }}
-      yaml_b64: ${{ steps.b64.outputs.yaml_b64 }}
+      files_json: ${{ steps.pick.outputs.files_json }}
       src_repo: ${{ github.repository }}
       src_sha: ${{ github.sha }}
 
     steps:
-      - name: Checkout repo
+      - name: Checkout bts-apps
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Pick YAML file
+      - name: Pick changed YAML files
         id: pick
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          $eventName = "${{ github.event_name }}"
+          $event = "${{ github.event_name }}"
           $inputFile = "${{ inputs.file }}"
 
-          if ($eventName -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($inputFile)) {
-            $file = $inputFile.Trim()
-            if ($file -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid file path: $file" }
-            if (-not (Test-Path $file)) { throw "File not found: $file" }
-            "file=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            exit 0
+          $files = @()
+
+          if ($event -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($inputFile)) {
+            $f = $inputFile.Trim()
+            if ($f -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid file: $f" }
+            if (-not (Test-Path $f)) { throw "File not found: $f" }
+            $files = @($f)
+          }
+          else {
+            $before = "${{ github.event.before }}"
+            $after  = "${{ github.sha }}"
+
+            if ([string]::IsNullOrWhiteSpace($before) -or $before -eq "0000000000000000000000000000000000000000") {
+              $before = "$(git rev-parse HEAD~1)"
+            }
+
+            $files = @(git diff --name-only $before $after |
+              Where-Object { $_ -match '^apps\/.*\.ya?ml$' } |
+              ForEach-Object { $_.Trim() } |
+              Sort-Object -Unique)
           }
 
-          $before = "${{ github.event.before }}"
-          $after  = "${{ github.sha }}"
+          if ($files.Count -eq 0) { throw "No apps YAML changes found." }
 
-          if ([string]::IsNullOrWhiteSpace($before) -or $before -eq "0000000000000000000000000000000000000000") {
-            $before = "$(git rev-parse HEAD~1)"
-          }
+          Write-Host "Changed YAML files:"
+          $files | ForEach-Object { Write-Host " - $_" }
 
-          $files = @(git diff --name-only $before $after |
-            Where-Object { $_ -match '^apps\/.*\.ya?ml$' } |
-            ForEach-Object { $_.Trim() } |
-            Sort-Object -Unique)
+          $json = "[" + (($files | ForEach-Object { '"' + ($_ -replace '"','\"') + '"' }) -join ",") + "]"
+          "files_json=$json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-          if ($files.Count -eq 0) { throw "No apps YAML file changed." }
-          if ($files.Count -ne 1) {
-            throw "Expected exactly 1 apps YAML change, found $($files.Count):`n$($files -join "`n")"
-          }
+  pr:
+    needs: detect
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        yaml_path: ${{ fromJson(needs.detect.outputs.files_json) }}
 
-          "file=$($files[0])" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+    steps:
+      - name: Checkout bts-apps
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Read metadata (orgname/app/env)
-        id: meta
+      - name: Mint GitHub App token (ORG secrets)
+        id: app-token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.AUTH0_GHAPP_ID }}
+          private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
+
+      - name: Parse YAML + compute target path + base64 encode
+        id: prep
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $file = "${{ steps.pick.outputs.file }}"
+
+          $file = "${{ matrix.yaml_path }}"
 
           Install-Module powershell-yaml -Scope CurrentUser -Force
           Import-Module powershell-yaml
@@ -87,28 +108,96 @@ jobs:
           if (-not $obj.app)     { throw "Missing app in $file" }
           if (-not $obj.env)     { throw "Missing env in $file" }
 
-          "org=$($obj.orgname)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "app=$($obj.app)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "env=$($obj.env)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $org = [string]$obj.orgname
+          $app = [string]$obj.app
+          $envName = ([string]$obj.env).ToLower()
 
-      - name: Base64 encode YAML content
-        id: b64
+          $target = "apps/$org/$app-$envName.yaml"
+
+          $bytes = [IO.File]::ReadAllBytes($file)
+          $b64 = [Convert]::ToBase64String($bytes)
+
+          "org=$org"         | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "app=$app"         | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "env=$envName"     | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "target=$target"   | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "yaml_b64=$b64"    | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Checkout auth0-apps (with App token)
+        uses: actions/checkout@v4
+        with:
+          repository: rajiastate-iam/auth0-apps
+          token: ${{ steps.app-token.outputs.token }}
+          path: auth0-apps
+          fetch-depth: 0
+
+      - name: Create branch + add file + push
+        id: push
         shell: pwsh
+        working-directory: auth0-apps
+        env:
+          YAML_B64: ${{ steps.prep.outputs.yaml_b64 }}
+          ORG: ${{ steps.prep.outputs.org }}
+          APP: ${{ steps.prep.outputs.app }}
+          ENV_NAME: ${{ steps.prep.outputs.env }}
+          TARGET: ${{ steps.prep.outputs.target }}
         run: |
           $ErrorActionPreference = "Stop"
-          $file = "${{ steps.pick.outputs.file }}"
-          $bytes = [System.IO.File]::ReadAllBytes($file)
-          $b64 = [Convert]::ToBase64String($bytes)
-          "yaml_b64=$b64" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-  call-auth0:
-    needs: prepare
-    uses: rajiastate-iam/auth0-apps/.github/workflows/reusable-receive-app.yml@master
-    with:
-      org: ${{ needs.prepare.outputs.org }}
-      app: ${{ needs.prepare.outputs.app }}
-      env: ${{ needs.prepare.outputs.env }}
-      yaml_b64: ${{ needs.prepare.outputs.yaml_b64 }}
-      yaml_path: ${{ needs.prepare.outputs.yaml_path }}
-      src_repo: ${{ needs.prepare.outputs.src_repo }}
-      src_sha: ${{ needs.prepare.outputs.src_sha }}
+          $org     = $env:ORG
+          $app     = $env:APP
+          $envName = $env:ENV_NAME
+          $target  = $env:TARGET
+          $b64     = $env:YAML_B64
+
+          if ([string]::IsNullOrWhiteSpace($b64)) { throw "YAML_B64 is empty" }
+
+          $branch = "auto/$org-$app-$envName-${{ github.run_id }}-${{ github.run_attempt }}"
+          git checkout -b $branch
+
+          $bytes = [Convert]::FromBase64String($b64)
+
+          $dir = Split-Path -Path $target -Parent
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+
+          [IO.File]::WriteAllBytes($target, $bytes)
+
+          git config user.name  "iam-auth0-bot"
+          git config user.email "iam-auth0-bot@users.noreply.github.com"
+
+          git add $target
+          git commit -m "Auth0 app request: $org / $app / $envName"
+          git push origin $branch
+
+          "branch=$branch" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Open PR in auth0-apps
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ORG: ${{ steps.prep.outputs.org }}
+          APP: ${{ steps.prep.outputs.app }}
+          ENV_NAME: ${{ steps.prep.outputs.env }}
+          TARGET: ${{ steps.prep.outputs.target }}
+          SRC_REPO: ${{ needs.detect.outputs.src_repo }}
+          SRC_SHA: ${{ needs.detect.outputs.src_sha }}
+          SRC_FILE: ${{ matrix.yaml_path }}
+          BRANCH: ${{ steps.push.outputs.branch }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $title = "Auth0 app request: $env:ORG / $env:APP / $env:ENV_NAME"
+          $body = @(
+            "Automated request from $env:SRC_REPO",
+            "Commit: $env:SRC_SHA",
+            "Source file: $env:SRC_FILE",
+            "Target file: $env:TARGET"
+          ) -join "`n"
+
+          # IMPORTANT: change --base to master if auth0-apps uses master
+          gh pr create `
+            --repo rajiastate-iam/auth0-apps `
+            --base main `
+            --head $env:BRANCH `
+            --title $title `
+            --body $body
