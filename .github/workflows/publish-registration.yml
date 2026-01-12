@@ -35,6 +35,8 @@ jobs:
         id: pick
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           $eventName = "${{ github.event_name }}"
           $inputFile = "${{ inputs.file }}"
           $files = @()
@@ -67,10 +69,10 @@ jobs:
           $files = $files | Sort-Object -Unique
           $files = @($files)
 
-          Write-Host "Selected files:"
+          Write-Host "Selected YAML files:"
           $files | ForEach-Object { Write-Host " - $_" }
 
-          # Force JSON array even for one item
+          # Build JSON array safely
           $json = "[" + (($files | ForEach-Object { '"' + ($_ -replace '"','\"') + '"' }) -join ",") + "]"
           Write-Host "files_json=$json"
 
@@ -86,12 +88,14 @@ jobs:
         yaml_path: ${{ fromJson(needs.detect.outputs.files_json) }}
 
     steps:
-      - name: Mint GitHub App token (from ORG secrets)
+      - name: Mint GitHub App token (ORG secrets)
         id: app-token
         uses: tibdex/github-app-token@v2
         with:
           app_id: ${{ secrets.AUTH0_GHAPP_ID }}
           private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
+          owner: rajiastate-iam
+          repositories: auth0-apps
 
       - name: Dispatch request to auth0-apps
         shell: pwsh
@@ -99,14 +103,18 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TARGET_REPO: rajiastate-iam/auth0-apps
         run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "GitHub App token is empty. Check GitHub App install + org secrets."
+          }
+
           $targetRepo = $env:TARGET_REPO
           $yamlPath   = "${{ matrix.yaml_path }}"
           $srcRepo    = "${{ needs.detect.outputs.src_repo }}"
           $srcSha     = "${{ needs.detect.outputs.src_sha }}"
 
-          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-            throw "GitHub App token is empty. Check app install + secrets."
-          }
+          if ($yamlPath -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid yaml_path: $yamlPath" }
 
           Write-Host "Dispatching file '$yamlPath' to $targetRepo"
           Write-Host "Source: $srcRepo @ $srcSha"
