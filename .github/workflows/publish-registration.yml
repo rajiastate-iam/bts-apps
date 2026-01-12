@@ -1,22 +1,87 @@
 name: Publish Auth0 Registration
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/*.yaml"
+      - "apps/*.yml"
+
   workflow_dispatch:
+    inputs:
+      file:
+        description: "Optional: single path like apps/<file>.yaml"
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  debug-installation:
+  detect:
     runs-on: ubuntu-latest
+    outputs:
+      files_json: ${{ steps.pick.outputs.files_json }}
+      src_repo: ${{ github.repository }}
+      src_sha: ${{ github.sha }}
 
     steps:
-      - name: Show repo context
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick changed YAML files
+        id: pick
         shell: pwsh
         run: |
-          Write-Host "Repo: $env:GITHUB_REPOSITORY"
-          Write-Host "Actor: $env:GITHUB_ACTOR"
+          $ErrorActionPreference = "Stop"
 
+          $eventName = "${{ github.event_name }}"
+          $inputFile = "${{ inputs.file }}"
+          $files = @()
+
+          if ($eventName -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($inputFile)) {
+            $file = $inputFile.Trim()
+            if ($file -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid file path: $file" }
+            if (-not (Test-Path $file)) { throw "File not found: $file" }
+            $files = @($file)
+          }
+          else {
+            $before = "${{ github.event.before }}"
+            $after  = "${{ github.sha }}"
+
+            if ([string]::IsNullOrWhiteSpace($before) -or $before -eq "0000000000000000000000000000000000000000") {
+              $before = "$(git rev-parse HEAD~1)"
+            }
+
+            Write-Host "Diffing $before..$after"
+            $files = @(git diff --name-only $before $after |
+              Where-Object { $_ -match '^apps\/.*\.ya?ml$' } |
+              ForEach-Object { $_.Trim() })
+          }
+
+          if ($files.Count -eq 0) { throw "No apps YAML files changed." }
+
+          $files = $files | Sort-Object -Unique
+          $files = @($files)
+
+          Write-Host "Selected YAML files:"
+          $files | ForEach-Object { Write-Host " - $_" }
+
+          $json = "[" + (($files | ForEach-Object { '"' + ($_ -replace '"','\"') + '"' }) -join ",") + "]"
+          "files_json=$json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  dispatch:
+    needs: detect
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        yaml_path: ${{ fromJson(needs.detect.outputs.files_json) }}
+
+    steps:
       - name: Validate org secrets are available (safe)
         shell: pwsh
         run: |
@@ -28,46 +93,28 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($appId)) { throw "AUTH0_GHAPP_ID is EMPTY in this repo. Org secret not visible here." }
           if ([string]::IsNullOrWhiteSpace($pkey))  { throw "AUTH0_GHAPP_PRIVATE_KEY is EMPTY in this repo. Org secret not visible here." }
 
-          Write-Host "AUTH0_GHAPP_ID present (length=$($appId.Length))"
-          Write-Host "AUTH0_GHAPP_PRIVATE_KEY present (length=$($pkey.Length))"
+          if ($pkey -notmatch "BEGIN (RSA )?PRIVATE KEY") { throw "Private key missing BEGIN header." }
+          if ($pkey -notmatch "END (RSA )?PRIVATE KEY")   { throw "Private key missing END footer." }
 
-          # Safe checks: header/footer existence only
-          if ($pkey -notmatch "BEGIN (RSA )?PRIVATE KEY") { throw "Private key is missing BEGIN header (bad format/paste)." }
-          if ($pkey -notmatch "END (RSA )?PRIVATE KEY")   { throw "Private key is missing END footer (bad format/paste)." }
+          Write-Host "Secrets look present and key has header/footer."
 
-          Write-Host "Private key header/footer look OK."
-
-      - name: Check GitHub App installation exists on this repo (uses GITHUB_TOKEN)
+      - name: Check GitHub App installation exists on THIS repo (uses GITHUB_TOKEN)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
-
           $repo = $env:GITHUB_REPOSITORY
           $uri  = "https://api.github.com/repos/$repo/installation"
+          Write-Host "Checking installation: $uri"
 
-          Write-Host "Checking installation endpoint: $uri"
-
-          try {
-            $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers @{
-              Authorization = "Bearer $env:GH_TOKEN"
-              Accept        = "application/vnd.github+json"
-              "User-Agent"  = "github-actions"
-            }
-
-            # If installed, GitHub returns installation object with id + app_id
-            Write-Host "✅ Installation exists on this repo."
-            Write-Host "installation.id: $($resp.id)"
-            Write-Host "app_id:          $($resp.app_id)"
+          $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept        = "application/vnd.github+json"
+            "User-Agent"  = "github-actions"
           }
-          catch {
-            Write-Host "❌ Installation lookup failed."
-            if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
-              Write-Host "StatusCode: $($_.Exception.Response.StatusCode.value__)"
-            }
-            throw
-          }
+
+          Write-Host "Installation exists. app_id=$($resp.app_id), installation_id=$($resp.id)"
 
       - name: Mint GitHub App token via tibdex (ORG secrets)
         id: app-token
@@ -76,10 +123,42 @@ jobs:
           app_id: ${{ secrets.AUTH0_GHAPP_ID }}
           private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
 
-      - name: Show token success (safe)
+      - name: Dispatch request to auth0-apps
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TARGET_REPO: rajiastate-iam/auth0-apps
         run: |
-          if ([string]::IsNullOrWhiteSpace("${{ steps.app-token.outputs.token }}")) {
-            throw "Token output was empty"
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "GitHub App token is empty."
           }
-          Write-Host "✅ GitHub App token minted successfully."
+
+          $yamlPath   = "${{ matrix.yaml_path }}"
+          $srcRepo    = "${{ needs.detect.outputs.src_repo }}"
+          $srcSha     = "${{ needs.detect.outputs.src_sha }}"
+          $targetRepo = $env:TARGET_REPO
+
+          if ($yamlPath -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid yaml_path: $yamlPath" }
+
+          $uri = "https://api.github.com/repos/$targetRepo/dispatches"
+
+          $payload = @{
+            event_type = "auth0_app_request"
+            client_payload = @{
+              src_repo  = $srcRepo
+              src_sha   = $srcSha
+              yaml_path = $yamlPath
+            }
+          } | ConvertTo-Json -Depth 10
+
+          Invoke-RestMethod `
+            -Method POST `
+            -Uri $uri `
+            -Headers @{
+              Authorization = "token $env:GH_TOKEN"
+              Accept        = "application/vnd.github+json"
+              "User-Agent"  = "github-actions"
+            } `
+            -Body $payload
