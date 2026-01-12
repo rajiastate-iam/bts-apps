@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "apps/*.yaml"
-      - "apps/*.yml"
+      - "apps/**/*.yaml"
+      - "apps/**/*.yml"
 
   workflow_dispatch:
     inputs:
@@ -96,25 +96,28 @@ jobs:
           if ($pkey -notmatch "BEGIN (RSA )?PRIVATE KEY") { throw "Private key missing BEGIN header." }
           if ($pkey -notmatch "END (RSA )?PRIVATE KEY")   { throw "Private key missing END footer." }
 
-          Write-Host "Secrets look present and key has header/footer."
+          Write-Host "Secrets present; key header/footer OK."
 
-      - name: Check GitHub App installation exists on THIS repo (uses GITHUB_TOKEN)
+      - name: Check GitHub App installation exists on THIS repo (uses github.token)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
+
           $repo = $env:GITHUB_REPOSITORY
           $uri  = "https://api.github.com/repos/$repo/installation"
+
           Write-Host "Checking installation: $uri"
 
           $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers @{
-            Authorization = "Bearer $env:GH_TOKEN"
-            Accept        = "application/vnd.github+json"
-            "User-Agent"  = "github-actions"
+            Authorization              = "Bearer $env:GH_TOKEN"
+            Accept                     = "application/vnd.github+json"
+            "X-GitHub-Api-Version"     = "2022-11-28"
+            "User-Agent"               = "github-actions"
           }
 
-          Write-Host "Installation exists. app_id=$($resp.app_id), installation_id=$($resp.id)"
+          Write-Host "✅ Installation exists. app_id=$($resp.app_id) installation_id=$($resp.id)"
 
       - name: Mint GitHub App token via tibdex (ORG secrets)
         id: app-token
@@ -142,6 +145,8 @@ jobs:
 
           if ($yamlPath -notmatch '^apps\/.*\.ya?ml$') { throw "Invalid yaml_path: $yamlPath" }
 
+          Write-Host "Dispatching $yamlPath from $srcRepo@$srcSha to $targetRepo"
+
           $uri = "https://api.github.com/repos/$targetRepo/dispatches"
 
           $payload = @{
@@ -157,8 +162,9 @@ jobs:
             -Method POST `
             -Uri $uri `
             -Headers @{
-              Authorization = "token $env:GH_TOKEN"
-              Accept        = "application/vnd.github+json"
-              "User-Agent"  = "github-actions"
+              Authorization          = "token $env:GH_TOKEN"
+              Accept                 = "application/vnd.github+json"
+              "X-GitHub-Api-Version" = "2022-11-28"
+              "User-Agent"           = "github-actions"
             } `
             -Body $payload
