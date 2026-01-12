@@ -1,10 +1,10 @@
 orgname: CWG
-servicenow_req: REQ0012345
+servicenow_req: REQ001111
 
 app: cwg-app
 env: dev
 
-displayname: "CWG APPLICATION"
+displayname: "CWG-APPLICATION"
 apptype: regular_web
 
 granttypes:
@@ -12,13 +12,13 @@ granttypes:
   - refresh_token
 
 callbacks:
-  - https://cwg1111.example.com/callback
+  - https://cwg12.example.com/callback
 
 logouturls:
-  - https://cwg1111.example.com/logout
+  - https://cwg12.example.com/logout
 
 allowedorigins:
-  - https://cwg1111.example.com
+  - https://cwg12.example.com
 
 clientmetadata:
   system: cwg
