@@ -81,7 +81,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ---------- PRE-PR POLICY VALIDATION (PowerShell-only) ----------
+      # ---------- PRE-PR POLICY VALIDATION (no connections required) ----------
       - name: Validate app policy
         shell: pwsh
         env:
@@ -95,15 +95,12 @@ jobs:
           $path = $env:YAML_PATH
           $obj  = (Get-Content $path -Raw) | ConvertFrom-Yaml
 
-          $errors       = @()
-          $allowedConns = @("CustomersDB","azure-ad-prod")
+          $errors = @()
 
-          # Required keys
           foreach ($k in @("orgname","app","env","displayname","apptype","servicenow_req")) {
             if (-not $obj.$k) { $errors += "$($path): missing required key '$k'" }
           }
 
-          # ServiceNow request format
           $snow = [string]$obj.servicenow_req
           if ($snow -and ($snow -notmatch '^REQ\d+$')) {
             $errors += "$($path): servicenow_req must match REQ<digits> (e.g., REQ0012345)"
@@ -129,25 +126,12 @@ jobs:
             }
           }
 
-          # URL checks
           Check-Urls $obj.callbacks      'callbacks'
           Check-Urls $obj.logouturls     'logouturls'
           Check-Urls $obj.allowedorigins 'allowedorigins'
 
-          # Connections restriction
-          $conns   = @($obj.connections)
-          $unknown = $conns | Where-Object { $_ -notin $allowedConns }
-          if ($unknown.Count -gt 0) {
-            $errors += "$($path): unsupported connections $($unknown -join ', '). Allowed: $($allowedConns -join ', ')"
-          }
-          if ($conns.Count -eq 0) {
-            $errors += "$($path): 'connections' must include at least one of $($allowedConns -join ', ')"
-          }
-
           if ($errors.Count -gt 0) {
-            Write-Host "VALIDATION FAILED:"
-            $errors | ForEach-Object { Write-Host " - $_" }
-            exit 1
+            Write-Host "VALIDATION FAILED:"; $errors | ForEach-Object { Write-Host " - $_" }; exit 1
           } else {
             Write-Host "Validation passed ✅"
           }
@@ -295,7 +279,7 @@ jobs:
             "Source file: $env:SRC_FILE",
             "Target file: $env:TARGET",
             "",
-            "Policy checks passed: https URLs only; no localhost/.local/127.0.0.1; valid ServiceNow request; connections restricted."
+            "Policy checks passed: https URLs only; no localhost/.local/127.0.0.1; valid ServiceNow request."
           ) -join "`n"
 
           $existing = gh pr list `

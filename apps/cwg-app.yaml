@@ -27,7 +27,3 @@ clientmetadata:
   environment: dev
 
 jwtlifetimeinseconds: 3600
-
-connections:
-  - CustomersDB
-  - azure-ad-prod
