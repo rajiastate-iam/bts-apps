@@ -1,0 +1,29 @@
+
+orgname: VEL
+servicenow_req: REQ0010000
+
+app: VEL-app
+env: dev
+
+displayname: "VEL-APP-terraform-demo"
+apptype: regular_web
+
+granttypes:
+  - authorization_code
+  - refresh_token
+
+callbacks:
+  - https://VEL1111.example.com/callback
+
+logouturls:
+  - https://VEL1111.example.com/logout
+
+allowedorigins:
+  - https://VEL1111.example.com
+
+clientmetadata:
+  system: VEL
+  owner_team: VEL-platform
+  environment: dev
+
+jwtlifetimeinseconds: 3600
