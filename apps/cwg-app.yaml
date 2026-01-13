@@ -5,7 +5,7 @@ servicenow_req: REQ0010000
 app: cwg-app
 env: dev
 
-displayname: "cwg-application"
+displayname: "CWG-APP"
 apptype: regular_web
 
 granttypes:
