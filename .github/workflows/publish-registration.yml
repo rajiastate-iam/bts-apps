@@ -136,12 +136,14 @@ jobs:
             Write-Host "Validation passed ✅"
           }
 
+      # --- FIX: use first-party token action (GitHub verified) ---
       - name: Mint GitHub App token (ORG secrets)
         id: app-token
-        uses: tibdex/github-app-token@v2
+        uses: actions/create-github-app-token@v1
         with:
-          app_id: ${{ secrets.AUTH0_GHAPP_ID }}
-          private_key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
+          app-id: ${{ secrets.AUTH0_GHAPP_ID }}
+          private-key: ${{ secrets.AUTH0_GHAPP_PRIVATE_KEY }}
+          # owner: WRBerkley # uncomment if the app is installed on multiple orgs and you need to target a specific owner
 
       - name: Parse YAML + compute target path + base64 encode
         id: prep
