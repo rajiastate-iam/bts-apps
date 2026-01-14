@@ -13,7 +13,7 @@ granttypes:
   - refresh_token
 
 callbacks:
-  - http://VUM1111.example.com/callback
+  - https://localhost/callback
 
 logouturls:
   - https://VUM1111.example.com/logout
