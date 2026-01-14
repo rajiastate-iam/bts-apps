@@ -1,0 +1,29 @@
+
+orgname: VUM
+servicenow_req: REQ0010000
+
+app: VUM-app
+env: dev
+
+displayname: "VUM-APP-terraform-demo"
+apptype: regular_web
+
+granttypes:
+  - authorization_code
+  - refresh_token
+
+callbacks:
+  - http://VUM1111.example.com/callback
+
+logouturls:
+  - https://VUM1111.example.com/logout
+
+allowedorigins:
+  - https://VUM1111.example.com
+
+clientmetadata:
+  system: VUM
+  owner_team: VUM-platform
+  environment: dev
+
+jwtlifetimeinseconds: 3600
